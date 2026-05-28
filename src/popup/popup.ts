@@ -1,31 +1,86 @@
 import { parseCommands } from '../commands/parser';
 import type { SwMessage } from '../types';
 
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+const TEMPLATES: Array<{ label: string; script: string }> = [
+  { label: 'Create new item',      script: 'click "+ New"\ntype "Untitled" in "Name"\nclick "Create"' },
+  { label: 'Edit & save',          script: 'click "Edit"\ntype "Updated value" in "Name"\nclick "Save"' },
+  { label: 'Open settings',        script: 'click "Settings"' },
+  { label: 'Delete with confirm',  script: 'click "Delete"\nwait 300ms\nclick "Confirm"' },
+  { label: 'Scroll & click',       script: 'scroll down 400\nwait 300ms\nclick "Load more"' },
+];
+
 // ─── Elements ─────────────────────────────────────────────────────────────────
 
-const panelCommand = document.getElementById('panel-command') as HTMLDivElement;
-const panelRunning = document.getElementById('panel-running') as HTMLDivElement;
-const panelDone    = document.getElementById('panel-done')    as HTMLDivElement;
-const panelError   = document.getElementById('panel-error')   as HTMLDivElement;
+const btnSettings  = document.getElementById('btn-settings')     as HTMLButtonElement;
+const panelSett    = document.getElementById('panel-settings')   as HTMLDivElement;
+const apiKeyInput  = document.getElementById('api-key-input')    as HTMLInputElement;
+const btnSaveKey   = document.getElementById('btn-save-key')     as HTMLButtonElement;
 
-const historyRow    = document.getElementById('history-row')    as HTMLDivElement;
-const historySelect = document.getElementById('history-select') as HTMLSelectElement;
-const cmdInput      = document.getElementById('cmd-input')      as HTMLTextAreaElement;
-const parseErrors   = document.getElementById('parse-errors')   as HTMLDivElement;
-const btnDry        = document.getElementById('btn-dry')        as HTMLButtonElement;
-const btnRun        = document.getElementById('btn-run')        as HTMLButtonElement;
+const panelCommand = document.getElementById('panel-command')    as HTMLDivElement;
+const panelRunning = document.getElementById('panel-running')    as HTMLDivElement;
+const panelDone    = document.getElementById('panel-done')       as HTMLDivElement;
+const panelError   = document.getElementById('panel-error')      as HTMLDivElement;
 
-const statusDot    = document.getElementById('status-dot')    as HTMLSpanElement;
-const statusLabel  = document.getElementById('status-label')  as HTMLSpanElement;
-const progressFill = document.getElementById('progress-fill') as HTMLDivElement;
-const progressText = document.getElementById('progress-text') as HTMLSpanElement;
-const stepDesc     = document.getElementById('step-desc')     as HTMLDivElement;
-const dryChecklist = document.getElementById('dry-checklist') as HTMLUListElement;
-const btnCancel    = document.getElementById('btn-cancel')    as HTMLButtonElement;
+const historyRow    = document.getElementById('history-row')     as HTMLDivElement;
+const historySelect = document.getElementById('history-select')  as HTMLSelectElement;
+const aiRow         = document.getElementById('ai-row')          as HTMLDivElement;
+const nlInput       = document.getElementById('nl-input')        as HTMLInputElement;
+const btnConvert    = document.getElementById('btn-convert')     as HTMLButtonElement;
+const templateSel   = document.getElementById('template-select') as HTMLSelectElement;
+const cmdInput      = document.getElementById('cmd-input')       as HTMLTextAreaElement;
+const parseErrors   = document.getElementById('parse-errors')    as HTMLDivElement;
+const btnDry        = document.getElementById('btn-dry')         as HTMLButtonElement;
+const btnRun        = document.getElementById('btn-run')         as HTMLButtonElement;
 
-const errorMsg = document.getElementById('error-msg') as HTMLDivElement;
-const btnBack  = document.getElementById('btn-back')  as HTMLButtonElement;
+const statusDot      = document.getElementById('status-dot')       as HTMLSpanElement;
+const statusLabel    = document.getElementById('status-label')     as HTMLSpanElement;
+const progressFill   = document.getElementById('progress-fill')    as HTMLDivElement;
+const progressText   = document.getElementById('progress-text')    as HTMLSpanElement;
+const stepDesc       = document.getElementById('step-desc')        as HTMLDivElement;
+const screenshotWrap = document.getElementById('screenshot-wrap')  as HTMLDivElement;
+const screenshotCvs  = document.getElementById('screenshot-canvas') as HTMLCanvasElement;
+const dryChecklist   = document.getElementById('dry-checklist')    as HTMLUListElement;
+const btnCancel      = document.getElementById('btn-cancel')       as HTMLButtonElement;
+
+const errorMsg  = document.getElementById('error-msg')  as HTMLDivElement;
+const btnBack   = document.getElementById('btn-back')   as HTMLButtonElement;
 const btnEditor = document.getElementById('btn-editor') as HTMLButtonElement;
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+const API_KEY_STORE = 'claudeApiKey';
+
+btnSettings.addEventListener('click', () => {
+  const open = !panelSett.hidden;
+  panelSett.hidden = open;
+  btnSettings.classList.toggle('active', !open);
+});
+
+btnSaveKey.addEventListener('click', async () => {
+  const key = apiKeyInput.value.trim();
+  await chrome.storage.local.set({ [API_KEY_STORE]: key });
+  aiRow.hidden = !key;
+  panelSett.hidden = true;
+  btnSettings.classList.remove('active');
+});
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+TEMPLATES.forEach(({ label, script }) => {
+  const opt = document.createElement('option');
+  opt.value = script;
+  opt.textContent = label;
+  templateSel.appendChild(opt);
+});
+
+templateSel.addEventListener('change', () => {
+  if (!templateSel.value) return;
+  cmdInput.value = templateSel.value;
+  templateSel.value = '';
+  validateInput();
+});
 
 // ─── Command history ──────────────────────────────────────────────────────────
 
@@ -40,21 +95,15 @@ async function saveHistory(script: string): Promise<void> {
   await renderHistory(updated);
 }
 
-async function loadHistory(): Promise<string[]> {
-  const result = await chrome.storage.local.get(HISTORY_KEY);
-  return result[HISTORY_KEY] ?? [];
-}
-
 async function renderHistory(scripts?: string[]): Promise<void> {
-  const list = scripts ?? (await loadHistory());
+  const list = scripts ?? ((await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY] ?? []) as string[];
   if (list.length === 0) { historyRow.hidden = true; return; }
   historyRow.hidden = false;
-  // Reset options
   historySelect.innerHTML = '<option value="">— load script —</option>';
   list.forEach((s, i) => {
     const opt = document.createElement('option');
     opt.value = String(i);
-    opt.textContent = s.split('\n')[0].slice(0, 40) + (s.length > 40 ? '…' : '');
+    opt.textContent = s.split('\n')[0].slice(0, 38) + (s.length > 38 ? '…' : '');
     historySelect.appendChild(opt);
   });
 }
@@ -62,12 +111,39 @@ async function renderHistory(scripts?: string[]): Promise<void> {
 historySelect.addEventListener('change', async () => {
   const idx = parseInt(historySelect.value, 10);
   if (isNaN(idx)) return;
-  const list = await loadHistory();
-  if (list[idx]) {
-    cmdInput.value = list[idx];
-    validateInput();
-  }
+  const list = ((await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY] ?? []) as string[];
+  if (list[idx]) { cmdInput.value = list[idx]; validateInput(); }
   historySelect.value = '';
+});
+
+// ─── AI conversion ────────────────────────────────────────────────────────────
+
+btnConvert.addEventListener('click', async () => {
+  const text = nlInput.value.trim();
+  if (!text) return;
+  btnConvert.disabled = true;
+  btnConvert.textContent = '…';
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'NL_TO_COMMANDS', text } as SwMessage) as
+      | { type: 'OK'; commands: string }
+      | { type: 'ERROR'; message: string };
+    if (response.type === 'OK') {
+      cmdInput.value = response.commands;
+      nlInput.value = '';
+      validateInput();
+    } else {
+      parseErrors.textContent = response.message;
+    }
+  } catch (err) {
+    parseErrors.textContent = err instanceof Error ? err.message : String(err);
+  } finally {
+    btnConvert.disabled = false;
+    btnConvert.textContent = '✨';
+  }
+});
+
+nlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); btnConvert.click(); }
 });
 
 // ─── Panel helpers ────────────────────────────────────────────────────────────
@@ -79,13 +155,15 @@ function showPanel(name: Panel): void {
   panelRunning.hidden = name !== 'running';
   panelDone.hidden    = name !== 'done';
   panelError.hidden   = name !== 'error';
+  if (name !== 'running') screenshotWrap.hidden = true;
 }
 
 function setRunningMode(mode: 'record' | 'dry'): void {
   statusDot.className = `status-dot ${mode === 'dry' ? 'status-dry' : 'status-recording'}`;
   dryChecklist.innerHTML = '';
-  dryChecklist.hidden = mode !== 'dry';
-  stepDesc.hidden = mode === 'dry';
+  dryChecklist.hidden    = mode !== 'dry';
+  stepDesc.hidden        = mode === 'dry';
+  screenshotWrap.hidden  = true;
 }
 
 function setProgress(step: number, total: number, description: string): void {
@@ -96,17 +174,12 @@ function setProgress(step: number, total: number, description: string): void {
   statusLabel.textContent = `Step ${step} of ${total}`;
 }
 
-function addDryChecklistItem(description: string, found: boolean | null): void {
+function addDryItem(description: string, found: boolean | null): void {
   const li = document.createElement('li');
   const icon = document.createElement('span');
   const label = document.createElement('span');
-  if (found === null) {
-    icon.className = 'dry-skip'; icon.textContent = '·';
-  } else if (found) {
-    icon.className = 'dry-ok'; icon.textContent = '✓';
-  } else {
-    icon.className = 'dry-fail'; icon.textContent = '✗';
-  }
+  icon.className = found === null ? 'dry-skip' : found ? 'dry-ok' : 'dry-fail';
+  icon.textContent = found === null ? '·' : found ? '✓' : '✗';
   label.textContent = description;
   li.appendChild(icon);
   li.appendChild(label);
@@ -114,21 +187,51 @@ function addDryChecklistItem(description: string, found: boolean | null): void {
   dryChecklist.scrollTop = dryChecklist.scrollHeight;
 }
 
-function showError(message: string): void {
-  errorMsg.textContent = message;
-  showPanel('error');
+// ─── Phase 3: screenshot rendering ───────────────────────────────────────────
+
+interface ScreenshotPayload {
+  dataUrl: string;
+  rect: { x: number; y: number; w: number; h: number; dpr: number };
+}
+
+async function renderScreenshot(payload: ScreenshotPayload): Promise<void> {
+  const { dataUrl, rect } = payload;
+  const img = new Image();
+  img.src = dataUrl;
+  await new Promise<void>((res) => { img.onload = () => res(); });
+
+  const MARGIN = 24;
+  const PREVIEW_W = 272;
+  const dpr = rect.dpr || 1;
+
+  // Source region in physical pixels (screenshot is captured at device pixel ratio)
+  const srcX = Math.max(0, (rect.x - MARGIN) * dpr);
+  const srcY = Math.max(0, (rect.y - MARGIN) * dpr);
+  const srcW = (rect.w + MARGIN * 2) * dpr;
+  const srcH = (rect.h + MARGIN * 2) * dpr;
+
+  const scale = PREVIEW_W / srcW;
+  const PREVIEW_H = Math.round(srcH * scale);
+
+  screenshotCvs.width  = PREVIEW_W;
+  screenshotCvs.height = PREVIEW_H;
+
+  const ctx = screenshotCvs.getContext('2d')!;
+  ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, PREVIEW_W, PREVIEW_H);
+
+  // Draw element highlight rect
+  ctx.strokeStyle = '#f6ad55';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(MARGIN * scale, MARGIN * scale, rect.w * dpr * scale, rect.h * dpr * scale);
+
+  screenshotWrap.hidden = false;
 }
 
 // ─── Input validation ─────────────────────────────────────────────────────────
 
 function validateInput(): void {
   const text = cmdInput.value.trim();
-  if (!text) {
-    parseErrors.textContent = '';
-    btnRun.disabled = true;
-    btnDry.disabled = true;
-    return;
-  }
+  if (!text) { parseErrors.textContent = ''; btnRun.disabled = true; btnDry.disabled = true; return; }
   const { errors } = parseCommands(text);
   parseErrors.textContent = errors.map((e) => `Line ${e.line}: ${e.reason}`).join('\n');
   const ok = errors.length === 0;
@@ -143,14 +246,11 @@ cmdInput.addEventListener('input', validateInput);
 btnRun.addEventListener('click', async () => {
   const { commands, errors } = parseCommands(cmdInput.value);
   if (errors.length > 0 || commands.length === 0) return;
-
   await saveHistory(cmdInput.value.trim());
-
   showPanel('running');
   setRunningMode('record');
   statusLabel.textContent = 'Starting…';
   setProgress(0, commands.length, 'Preparing…');
-
   await chrome.runtime.sendMessage({ type: 'RUN_COMMANDS', commands } as SwMessage);
 });
 
@@ -159,12 +259,10 @@ btnRun.addEventListener('click', async () => {
 btnDry.addEventListener('click', async () => {
   const { commands, errors } = parseCommands(cmdInput.value);
   if (errors.length > 0 || commands.length === 0) return;
-
   showPanel('running');
   setRunningMode('dry');
   statusLabel.textContent = 'Dry Run';
   setProgress(0, commands.length, 'Scanning elements…');
-
   await chrome.runtime.sendMessage({ type: 'RUN_DRY_RUN', commands } as SwMessage);
 });
 
@@ -172,8 +270,7 @@ btnDry.addEventListener('click', async () => {
 
 btnCancel.addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'CANCEL_AUTOMATION' } as SwMessage);
-  // Reset dry run state too
-  await chrome.storage.session.remove(['dryRunState', 'dryRunStep', 'dryRunTotal', 'dryRunDescription', 'dryRunFound']);
+  await chrome.storage.session.remove(['dryRunState', 'dryRunStep', 'dryRunTotal', 'dryRunDescription', 'dryRunFound', 'dryRunScreenshotReady']);
   showPanel('command');
 });
 
@@ -184,71 +281,70 @@ btnEditor.addEventListener('click', () => {
   window.close();
 });
 
-// ─── Storage listener — react to SW state changes ────────────────────────────
+// ─── Storage listener ─────────────────────────────────────────────────────────
 
 chrome.storage.session.onChanged.addListener((changes) => {
-  // Automation state changes
   if ('automationState' in changes) {
     const state = changes['automationState'].newValue as string | undefined;
-    if (state === 'running') {
-      showPanel('running');
-      setRunningMode('record');
-    } else if (state === 'done') {
-      showPanel('done');
-    } else if (state === 'error') {
-      const desc = changes['automationDesc']?.newValue as string | undefined;
-      showError(desc ?? 'Automation failed. Check the console for details.');
+    if (state === 'running') { showPanel('running'); setRunningMode('record'); }
+    else if (state === 'done') { showPanel('done'); }
+    else if (state === 'error') {
+      showPanel('error');
+      errorMsg.textContent = (changes['automationDesc']?.newValue as string | undefined) ?? 'Automation failed.';
     }
   }
 
-  // Automation progress
   if ('automationStep' in changes || 'automationDesc' in changes) {
-    chrome.storage.session.get(
-      ['automationStep', 'automationTotal', 'automationDesc'],
-      (items) => {
-        setProgress(
-          (items['automationStep']  as number | undefined) ?? 0,
-          (items['automationTotal'] as number | undefined) ?? 0,
-          (items['automationDesc']  as string | undefined) ?? '',
-        );
-      },
-    );
+    chrome.storage.session.get(['automationStep', 'automationTotal', 'automationDesc'], (items) => {
+      setProgress(
+        (items['automationStep']  as number | undefined) ?? 0,
+        (items['automationTotal'] as number | undefined) ?? 0,
+        (items['automationDesc']  as string | undefined) ?? '',
+      );
+    });
   }
 
-  // Dry run steps
   if ('dryRunStep' in changes) {
     const step  = changes['dryRunStep'].newValue as number ?? 0;
     const total = changes['dryRunTotal']?.newValue as number ?? 0;
     const desc  = changes['dryRunDescription']?.newValue as string ?? '';
     const found = changes['dryRunFound']?.newValue as boolean ?? false;
-    const pct   = total > 0 ? Math.round((step / total) * 100) : 0;
-    progressFill.style.width = `${pct}%`;
+    progressFill.style.width = `${total > 0 ? Math.round((step / total) * 100) : 0}%`;
     progressText.textContent = `${step} / ${total}`;
-    statusLabel.textContent = `Dry Run — ${step} / ${total}`;
-    addDryChecklistItem(desc, found);
+    statusLabel.textContent  = `Dry Run — ${step} / ${total}`;
+    addDryItem(desc, found);
   }
 
-  if ('dryRunState' in changes) {
-    const state = changes['dryRunState'].newValue as string | undefined;
-    if (state === 'done') {
-      statusLabel.textContent = 'Dry Run complete';
-      progressFill.style.width = '100%';
-    }
+  if ('dryRunState' in changes && changes['dryRunState'].newValue === 'done') {
+    statusLabel.textContent = 'Dry Run complete';
+    progressFill.style.width = '100%';
+  }
+
+  // Phase 3: screenshot ready
+  if ('dryRunScreenshotReady' in changes) {
+    chrome.runtime.sendMessage({ type: 'GET_DRY_RUN_SCREENSHOT' } as SwMessage)
+      .then((payload) => { if (payload) renderScreenshot(payload as ScreenshotPayload); })
+      .catch(() => {});
   }
 });
 
-// ─── Init — restore UI if popup reopened mid-run ──────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
-  await renderHistory();
+  // Restore API key + show AI row if configured
+  const local = await chrome.storage.local.get([API_KEY_STORE, 'commandHistory']);
+  const apiKey = local[API_KEY_STORE] as string | undefined;
+  if (apiKey) { apiKeyInput.value = apiKey; aiRow.hidden = false; }
+  await renderHistory(local['commandHistory'] ?? []);
 
+  // Populate templates
   const items = await chrome.storage.session.get([
     'automationState', 'automationStep', 'automationTotal', 'automationDesc',
     'dryRunState',
   ]);
 
   const autoState = items['automationState'] as string | undefined;
-  const dryState  = items['dryRunState']  as string | undefined;
+  const dryState  = items['dryRunState']     as string | undefined;
 
   if (autoState === 'running') {
     showPanel('running');
@@ -261,7 +357,8 @@ async function init(): Promise<void> {
   } else if (autoState === 'done') {
     showPanel('done');
   } else if (autoState === 'error') {
-    showError((items['automationDesc'] as string | undefined) ?? 'Automation failed.');
+    showPanel('error');
+    errorMsg.textContent = (items['automationDesc'] as string | undefined) ?? 'Automation failed.';
   } else if (dryState === 'running') {
     showPanel('running');
     setRunningMode('dry');

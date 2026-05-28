@@ -10,6 +10,17 @@
     <div class="header">
       <span class="logo">🎬</span>
       <span class="title">Cursor Capture</span>
+      <button class="btn-settings" id="btn-settings" title="Settings">⚙</button>
+    </div>
+
+    <!-- Settings panel (toggled by ⚙️) -->
+    <div id="panel-settings" class="settings-panel" hidden>
+      <label class="field-label" for="api-key-input">Claude API Key</label>
+      <div class="api-key-row">
+        <input type="password" id="api-key-input" class="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off" />
+        <button class="btn-save-key" id="btn-save-key">Save</button>
+      </div>
+      <div class="api-key-hint">Used locally to convert natural-language descriptions to commands.</div>
     </div>
 
     <!-- Command input panel -->
@@ -21,7 +32,19 @@
         </select>
       </div>
 
-      <label class="field-label" for="cmd-input">Commands</label>
+      <!-- AI input (shown when API key is configured) -->
+      <div id="ai-row" class="ai-row" hidden>
+        <input type="text" id="nl-input" class="nl-input" placeholder="Describe what to automate…" />
+        <button class="btn-convert" id="btn-convert" title="Convert with Claude AI">✨</button>
+      </div>
+
+      <div class="textarea-header">
+        <label class="field-label" for="cmd-input">Commands</label>
+        <select id="template-select" class="template-select">
+          <option value="">Templates</option>
+        </select>
+      </div>
+
       <textarea
         id="cmd-input"
         class="cmd-textarea"
@@ -54,7 +77,11 @@ click "Create"'
       </div>
       <div class="step-desc" id="step-desc"></div>
 
-      <!-- Dry-run checklist (hidden during real run) -->
+      <!-- Phase 3: element screenshot preview (dry run only) -->
+      <div id="screenshot-wrap" class="screenshot-wrap" hidden>
+        <canvas id="screenshot-canvas" class="screenshot-canvas"></canvas>
+      </div>
+
       <ul class="dry-checklist" id="dry-checklist"></ul>
 
       <button class="btn-cancel" id="btn-cancel">Cancel</button>

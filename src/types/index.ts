@@ -234,7 +234,9 @@ export type SwMessage =
   | { type: 'GET_STATE' }
   | { type: 'RUN_COMMANDS'; commands: ParsedCommand[] }
   | { type: 'RUN_DRY_RUN'; commands: ParsedCommand[] }
-  | { type: 'CANCEL_AUTOMATION' };
+  | { type: 'CANCEL_AUTOMATION' }
+  | { type: 'NL_TO_COMMANDS'; text: string }
+  | { type: 'GET_DRY_RUN_SCREENSHOT' };
 
 export type SwResponse =
   | { type: 'STATE'; recordingState: RecordingState }
@@ -257,5 +259,5 @@ export type ContentToSwMessage =
   | { type: 'AUTOMATION_PROGRESS'; step: number; total: number; description: string }
   | { type: 'AUTOMATION_DONE' }
   | { type: 'AUTOMATION_ERROR'; message: string }
-  | { type: 'DRY_RUN_STEP'; step: number; total: number; description: string; found: boolean }
+  | { type: 'DRY_RUN_STEP'; step: number; total: number; description: string; found: boolean; rect: { x: number; y: number; w: number; h: number; dpr: number } | null }
   | { type: 'DRY_RUN_DONE' };

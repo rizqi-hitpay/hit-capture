@@ -9,12 +9,7 @@ export async function runAutomation(
 ): Promise<void> {
   const result = await runCommands(commands, startMs, {
     onProgress(step, total, description) {
-      chrome.runtime.sendMessage({
-        type: 'AUTOMATION_PROGRESS',
-        step,
-        total,
-        description,
-      }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'AUTOMATION_PROGRESS', step, total, description }).catch(() => {});
     },
     onEvent,
   });
@@ -26,7 +21,7 @@ export async function runAutomation(
   }
 }
 
-/** Dry-run: find & highlight each target without recording or clicking. */
+/** Dry-run: highlight each target, report found/not-found + element rect for screenshot. */
 export async function runDryRun(commands: ParsedCommand[]): Promise<void> {
   await dryRunCommands(commands, (result) => {
     chrome.runtime.sendMessage({
@@ -35,6 +30,7 @@ export async function runDryRun(commands: ParsedCommand[]): Promise<void> {
       total: commands.length,
       description: result.description,
       found: result.found,
+      rect: result.rect ?? null,
     }).catch(() => {});
   });
   chrome.runtime.sendMessage({ type: 'DRY_RUN_DONE' }).catch(() => {});

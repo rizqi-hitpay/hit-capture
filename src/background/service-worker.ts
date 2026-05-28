@@ -16,6 +16,7 @@ import type {
   SwMessage,
   ParsedCommand,
 } from '../types';
+import { convertNaturalLanguage } from './claude';
 
 const KEY_STATE        = 'recordingState';
 const KEY_TAB          = 'recordingTabId';
@@ -24,6 +25,15 @@ const KEY_AUTO_STATE   = 'automationState';
 const KEY_AUTO_STEP    = 'automationStep';
 const KEY_AUTO_TOTAL   = 'automationTotal';
 const KEY_AUTO_DESC    = 'automationDesc';
+const KEY_DRY_TAB      = 'dryRunTabId';
+const KEY_API          = 'claudeApiKey';
+
+// In-memory screenshot cache (lost if SW restarts, acceptable for a live dry run)
+interface ScreenshotCache {
+  dataUrl: string;
+  rect: { x: number; y: number; w: number; h: number; dpr: number };
+}
+let screenshotCache: ScreenshotCache | null = null;
 
 // ─── State helpers ────────────────────────────────────────────────────────────
 
@@ -376,7 +386,13 @@ async function runDryRunMode(commands: ParsedCommand[]): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id == null) return;
   await ensureContentScript(tab.id);
-  await chrome.storage.session.set({ dryRunState: 'running', dryRunStep: 0, dryRunTotal: commands.length });
+  screenshotCache = null;
+  await chrome.storage.session.set({
+    dryRunState: 'running',
+    dryRunStep: 0,
+    dryRunTotal: commands.length,
+    [KEY_DRY_TAB]: tab.id,
+  });
   try {
     await chrome.tabs.sendMessage(tab.id, { type: 'RUN_DRY_RUN', commands } as ContentMessage);
   } catch (err) {
@@ -413,12 +429,22 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       return;
     }
     if (msg.type === 'DRY_RUN_STEP') {
+      const rect = (msg as { rect?: ScreenshotCache['rect'] | null }).rect ?? null;
       chrome.storage.session.set({
         dryRunStep: msg.step ?? 0,
         dryRunTotal: msg.total ?? 0,
         dryRunDescription: msg.description ?? '',
         dryRunFound: msg.found ?? false,
       });
+      // Phase 3: capture screenshot when element was found
+      if (msg.found && rect && sender.tab?.windowId != null) {
+        chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'jpeg', quality: 55 })
+          .then((dataUrl) => {
+            screenshotCache = { dataUrl, rect: rect! };
+            chrome.storage.session.set({ dryRunScreenshotReady: Date.now() });
+          })
+          .catch(() => { /* screenshot is optional */ });
+      }
       return;
     }
     if (msg.type === 'DRY_RUN_DONE') {
@@ -450,6 +476,24 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       setAutomationState('idle');
       sendResponse({ type: 'OK' });
     });
+    return true;
+  }
+  if (msg.type === 'NL_TO_COMMANDS') {
+    const text = (msg as { text?: string }).text ?? '';
+    chrome.storage.local.get(KEY_API).then(async (result) => {
+      const apiKey = result[KEY_API] as string | undefined;
+      if (!apiKey) { sendResponse({ type: 'ERROR', message: 'No API key set. Open settings (⚙️) to add your Claude API key.' }); return; }
+      try {
+        const commands = await convertNaturalLanguage(text, apiKey);
+        sendResponse({ type: 'OK', commands });
+      } catch (err) {
+        sendResponse({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) });
+      }
+    });
+    return true;
+  }
+  if (msg.type === 'GET_DRY_RUN_SCREENSHOT') {
+    sendResponse(screenshotCache ?? null);
     return true;
   }
 });

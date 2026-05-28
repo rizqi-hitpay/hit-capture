@@ -15,14 +15,16 @@ export interface RunnerResult {
   error?: string;
 }
 
-const CURSOR_SPEED_PX_MS = 1.2;   // px per ms → 1200 px/s
+const CURSOR_SPEED_PX_MS = 1.2;
 const MIN_MOVE_MS = 300;
 const DWELL_MS = 280;
 const POST_CLICK_WAIT_MS = 500;
 const POST_TYPE_WAIT_MS = 200;
 const TYPE_CHAR_MS = 45;
-const FIND_RETRY_MS = 3000;       // Phase 2: retry element lookup for up to 3 s
-const URL_SETTLE_MS = 1500;       // Phase 2: wait after SPA navigation
+const FIND_RETRY_MS = 3000;
+const URL_SETTLE_MS = 1500;
+const DOM_SETTLE_QUIET_MS = 180;  // Phase 3: ms of DOM inactivity = page settled
+const DOM_SETTLE_TIMEOUT_MS = 1200; // Phase 3: give up after this long
 
 export async function runCommands(
   commands: ParsedCommand[],
@@ -52,8 +54,6 @@ export async function runCommands(
       if (cmd.type === 'scroll') {
         const deltaY = cmd.direction === 'down' ? (cmd.amount ?? 300) : -(cmd.amount ?? 300);
         window.scrollBy({ top: deltaY, behavior: 'smooth' });
-        // Scroll events are captured by the content script's DOM scroll listener —
-        // no manual push needed here (would cause duplicates).
         t += 600;
         await sleep(600);
         continue;
@@ -82,8 +82,9 @@ export async function runCommands(
           await sleep(50);
           onEvent({ k: 'up', t, x: cursor.x, y: cursor.y, b: 0 });
           t += POST_CLICK_WAIT_MS;
-          // Phase 2: if SPA navigation happened, wait for new view to settle
           await waitForUrlSettle(prevUrl, URL_SETTLE_MS);
+          // Phase 3: wait for any residual DOM mutations to settle
+          await waitForDomSettle(DOM_SETTLE_TIMEOUT_MS);
           await sleep(POST_CLICK_WAIT_MS);
         }
         continue;
@@ -139,14 +140,21 @@ export async function runCommands(
   return { success: true };
 }
 
-// ─── Phase 2: Dry-run — find each target, report found/not-found ──────────────
+// ─── Dry-run ──────────────────────────────────────────────────────────────────
+
+export interface DryRunRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  dpr: number;
+}
 
 export interface DryRunStepResult {
   step: number;
   description: string;
   found: boolean;
-  x?: number;
-  y?: number;
+  rect?: DryRunRect;
 }
 
 export async function dryRunCommands(
@@ -169,11 +177,19 @@ export async function dryRunCommands(
       : findByText(cmd.target!);
 
     if (found) {
+      // Phase 3: scroll element into view before capturing screenshot
+      found.element.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+      await sleep(80); // let scroll settle
       const rect = found.element.getBoundingClientRect();
-      const x = Math.round(rect.left + rect.width / 2);
-      const y = Math.round(rect.top + rect.height / 2);
+      const dryRect: DryRunRect = {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        dpr: window.devicePixelRatio,
+      };
       showHighlight(found.element);
-      onStep({ step: i + 1, description: desc, found: true, x, y });
+      onStep({ step: i + 1, description: desc, found: true, rect: dryRect });
       await sleep(900);
       removeHighlight();
     } else {
@@ -204,19 +220,39 @@ async function findWithRetry(
 async function waitForUrlSettle(prevUrl: string, timeoutMs: number): Promise<void> {
   await sleep(150);
   if (location.href === prevUrl) return;
-  // URL changed — wait for the new view to render
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (document.readyState === 'complete') {
-      await sleep(400); // give async frameworks time to render
-      return;
-    }
+    if (document.readyState === 'complete') { await sleep(400); return; }
     await sleep(100);
   }
 }
 
+/**
+ * Phase 3 auto-wait: resolves when the DOM has been quiet for DOM_SETTLE_QUIET_MS,
+ * or after DOM_SETTLE_TIMEOUT_MS total — whichever comes first.
+ */
+async function waitForDomSettle(timeoutMs: number): Promise<void> {
+  const root = document.body ?? document.documentElement;
+  if (!root) return;
+
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const finish = () => { observer.disconnect(); clearTimeout(timer); resolve(); };
+    const resetTimer = () => {
+      clearTimeout(timer);
+      if (Date.now() >= deadline) { finish(); return; }
+      timer = setTimeout(finish, DOM_SETTLE_QUIET_MS);
+    };
+
+    const observer = new MutationObserver(resetTimer);
+    observer.observe(root, { childList: true, subtree: true, attributes: true });
+    resetTimer();
+  });
+}
+
 function centreOf(found: FoundElement): Point {
-  // Re-measure after any scroll
   const rect = found.element.getBoundingClientRect();
   return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
 }
@@ -230,16 +266,11 @@ function showHighlight(target: HTMLElement): void {
   el.id = '__cc-dry-run-highlight__';
   el.style.cssText = [
     'position:fixed',
-    `top:${rect.top - 4}px`,
-    `left:${rect.left - 4}px`,
-    `width:${rect.width + 8}px`,
-    `height:${rect.height + 8}px`,
-    'border:2px solid #f6ad55',
-    'border-radius:4px',
+    `top:${rect.top - 4}px`, `left:${rect.left - 4}px`,
+    `width:${rect.width + 8}px`, `height:${rect.height + 8}px`,
+    'border:2px solid #f6ad55', 'border-radius:4px',
     'background:rgba(246,173,85,0.15)',
-    'pointer-events:none',
-    'z-index:2147483646',
-    'transition:opacity 0.15s',
+    'pointer-events:none', 'z-index:2147483646',
   ].join(';');
   document.documentElement.appendChild(el);
   highlightEl = el;
