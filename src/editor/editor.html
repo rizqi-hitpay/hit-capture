@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cursor Capture — Editor</title>
+    <link rel="stylesheet" href="editor.css" />
+  </head>
+  <body>
+
+    <!-- App shell -->
+    <div id="app">
+
+      <!-- Header -->
+      <header class="app-header">
+        <div class="app-header__logo">
+          <span class="logo-icon">🎬</span>
+          <span class="logo-text">Cursor Capture</span>
+        </div>
+        <div id="export-container"></div>
+      </header>
+
+      <!-- Upload screen (shown when no files loaded) -->
+      <section id="upload-section" class="upload-section">
+        <!-- UploadZone mounts here -->
+      </section>
+
+      <!-- Editor layout (shown after files are loaded) -->
+      <div id="editor-layout" class="editor-layout" style="display:none">
+
+        <!-- Left: control panel -->
+        <aside class="editor-sidebar" id="control-panel"></aside>
+
+        <!-- Right: preview + playback -->
+        <main class="editor-main">
+          <div class="preview-wrapper">
+            <div id="preview-container" class="preview-container"></div>
+
+            <!-- Before/After toggle (below preview) -->
+            <div class="preview-footer">
+              <div id="before-after-container"></div>
+            </div>
+          </div>
+        </main>
+
+      </div>
+
+      <!-- Processing overlay -->
+      <div id="processing-overlay" class="processing-overlay" style="display:none">
+        <div class="processing-spinner"></div>
+        <p>Polishing cursor track…</p>
+      </div>
+
+      <!-- Error banner -->
+      <div id="error-banner" class="error-banner" style="display:none">
+        <span id="error-msg"></span>
+        <button id="error-close" class="error-close">✕</button>
+      </div>
+
+    </div>
+
+    <script type="module" src="editor.ts"></script>
+  </body>
+</html>

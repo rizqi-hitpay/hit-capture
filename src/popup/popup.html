@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cursor Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="header">
+      <span class="logo">🎬</span>
+      <span class="title">Cursor Capture</span>
+    </div>
+
+    <div class="status-row">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-label" id="status-label">Ready</span>
+    </div>
+
+    <button class="btn-record" id="btn-record" disabled>
+      <span id="btn-label">Start Recording</span>
+    </button>
+
+    <div class="hint" id="hint">
+      Records screen + cursor together<br/>
+      Cmd+Shift+R to toggle
+    </div>
+
+    <hr class="divider" />
+
+    <button class="btn-editor" id="btn-editor">Open Editor →</button>
+
+    <script type="module" src="popup.ts"></script>
+  </body>
+</html>
