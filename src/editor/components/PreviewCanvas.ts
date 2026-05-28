@@ -18,6 +18,8 @@ export class PreviewCanvas {
   private rafId: number | null = null;
   private unsub: (() => void) | null = null;
   private playing = false;
+  /** Fallback duration (ms) from polishedTrack when video.duration is Infinity (WebM). */
+  private effectiveDurationMs = 0;
 
   constructor(container: HTMLElement) {
     container.innerHTML = `
@@ -74,6 +76,8 @@ export class PreviewCanvas {
 
     // Update canvas size and zoom when track or config changes
     if (state.polishedTrack && state.phase === 'ready') {
+      this.effectiveDurationMs = state.polishedTrack.totalDurationMs;
+
       const W = Math.round(state.sceneConfig.outputWidth * PREVIEW_SCALE);
       const H = Math.round(state.sceneConfig.outputHeight * PREVIEW_SCALE);
       if (this.canvas.width !== W || this.canvas.height !== H) {
@@ -207,16 +211,19 @@ export class PreviewCanvas {
     });
 
     scrubber.addEventListener('input', () => {
-      // video.duration is Infinity for WebM from MediaRecorder and NaN until
-      // metadata loads — guard both cases.
-      if (!isFinite(this.video.duration)) return;
-      const pct = parseFloat(scrubber.value) / 100;
-      this.video.currentTime = this.video.duration * pct;
+      const durMs = isFinite(this.video.duration)
+        ? this.video.duration * 1000
+        : this.effectiveDurationMs;
+      if (durMs <= 0) return;
+      this.video.currentTime = (durMs / 1000) * (parseFloat(scrubber.value) / 100);
     });
 
     this.video.addEventListener('timeupdate', () => {
-      if (isFinite(this.video.duration) && this.video.duration > 0) {
-        scrubber.value = String((this.video.currentTime / this.video.duration) * 100);
+      const durMs = isFinite(this.video.duration)
+        ? this.video.duration * 1000
+        : this.effectiveDurationMs;
+      if (durMs > 0) {
+        scrubber.value = String((this.video.currentTime * 1000 / durMs) * 100);
       }
     });
   }
@@ -230,7 +237,10 @@ export class PreviewCanvas {
       const sec = Math.floor(s % 60);
       return `${m}:${String(sec).padStart(2, '0')}`;
     };
-    el.textContent = `${fmt(this.video.currentTime)} / ${fmt(this.video.duration)}`;
+    const durSec = isFinite(this.video.duration)
+      ? this.video.duration
+      : this.effectiveDurationMs / 1000;
+    el.textContent = `${fmt(this.video.currentTime)} / ${fmt(durSec)}`;
   }
 }
 

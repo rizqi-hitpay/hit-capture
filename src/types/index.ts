@@ -199,16 +199,15 @@ export type PipelineWorkerOut =
   | { type: 'DONE'; track: PolishedTrack }
   | { type: 'ERROR'; message: string };
 
-export interface EncodeWorkerIn {
-  type: 'START_ENCODE';
-  videoFile: File;
-  track: PolishedTrack;
-  sceneConfig: SceneConfig;
-  session: CaptureSession;
-  coordTransform: CoordTransform;
-}
+export type EncodeWorkerIn =
+  | { type: 'START_ENCODE'; videoFile: File; track: PolishedTrack; sceneConfig: SceneConfig; session: CaptureSession; coordTransform: CoordTransform }
+  | { type: 'INIT_WEBM_ENCODE'; track: PolishedTrack; sceneConfig: SceneConfig; session: CaptureSession; coordTransform: CoordTransform; estimatedFrames: number }
+  | { type: 'WEBM_FRAME'; frame: VideoFrame }
+  | { type: 'END_WEBM_ENCODE' };
 
 export type EncodeWorkerOut =
+  | { type: 'WEBM_INIT_ACK' }
+  | { type: 'WEBM_FRAME_ACK' }
   | { type: 'PROGRESS'; percent: number }
   | { type: 'DONE'; buffer: ArrayBuffer }
   | { type: 'ERROR'; message: string };

@@ -1,10 +1,9 @@
 /**
  * Encode Web Worker
  *
- * Full encode pipeline:
- *   VideoDecoder (demux via mp4box) → OffscreenCanvas render → VideoEncoder → mp4-muxer
- *
- * All processing stays in this worker; no DOM access required.
+ * Two encode modes:
+ *  - MP4/MOV input: VideoDecoder (demux via mp4box) → OffscreenCanvas render → VideoEncoder
+ *  - WebM input:    Main thread seeks + captures VideoFrame → worker renders + encodes
  */
 import type {
   EncodeWorkerIn,
@@ -16,6 +15,8 @@ import type {
   CoordTransform,
   RenderFrameData,
 } from '../types';
+import type { MuxerSetup } from '../encoder/mp4Muxer';
+import type { EncoderSetupResult } from '../encoder/webcodecs';
 import { demuxMP4 } from '../encoder/frameSource';
 import { setupEncoder } from '../encoder/webcodecs';
 import { createMuxer } from '../encoder/mp4Muxer';
@@ -24,18 +25,124 @@ import { SceneRenderer } from '../renderer/sceneRenderer';
 import { DEFAULT_OUTPUT_FRAMERATE, DEFAULT_OUTPUT_BITRATE, ENCODE_MAX_QUEUE_DEPTH } from '../shared/constants';
 import { transformPoint } from '../shared/coords';
 
-self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
-  if (e.data.type !== 'START_ENCODE') return;
-  const { videoFile, track, sceneConfig, session, coordTransform } = e.data;
+// ─── WebM streaming encode state (set by INIT_WEBM_ENCODE, cleared by END_WEBM_ENCODE)
 
-  try {
-    await encode(videoFile, track, sceneConfig, session, coordTransform);
-  } catch (err) {
-    const out: EncodeWorkerOut = {
-      type: 'ERROR',
-      message: err instanceof Error ? err.message : String(err),
-    };
-    self.postMessage(out);
+interface WebmEncodeState {
+  track: PolishedTrack;
+  sceneConfig: SceneConfig;
+  session: CaptureSession;
+  coordTransform: CoordTransform;
+  canvas: OffscreenCanvas;
+  ctx: OffscreenCanvasRenderingContext2D;
+  renderer: SceneRenderer;
+  zoom: ZoomController;
+  muxerSetup: MuxerSetup;
+  encoderSetup: EncoderSetupResult;
+  frameCount: number;
+  estimatedFrames: number;
+}
+
+let webmState: WebmEncodeState | null = null;
+
+// ─── Message dispatch ─────────────────────────────────────────────────────────
+
+self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
+  const msg = e.data;
+
+  if (msg.type === 'START_ENCODE') {
+    const { videoFile, track, sceneConfig, session, coordTransform } = msg;
+    try {
+      await encode(videoFile, track, sceneConfig, session, coordTransform);
+    } catch (err) {
+      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
+      self.postMessage(out);
+    }
+    return;
+  }
+
+  if (msg.type === 'INIT_WEBM_ENCODE') {
+    const { track, sceneConfig, session, coordTransform, estimatedFrames } = msg;
+    const { outputWidth: W, outputHeight: H } = sceneConfig;
+    try {
+      const canvas = new OffscreenCanvas(W, H);
+      const ctx = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
+      const renderer = new SceneRenderer();
+      const zoom = new ZoomController(sceneConfig.autoZoom);
+      zoom.build(track, session.viewport.w, session.viewport.h);
+
+      let muxerSetup: MuxerSetup | null = null;
+      const encoderSetup = await setupEncoder({
+        width: W, height: H,
+        framerate: DEFAULT_OUTPUT_FRAMERATE,
+        bitrate: DEFAULT_OUTPUT_BITRATE,
+        onChunk: (chunk, meta) => muxerSetup?.muxer.addVideoChunk(chunk, meta),
+        onError: (err) => console.error('[EncodeWorker] WebM encoder error:', err),
+      });
+      muxerSetup = createMuxer(encoderSetup.codec, W, H);
+
+      webmState = { track, sceneConfig, session, coordTransform, canvas, ctx, renderer, zoom, muxerSetup, encoderSetup, frameCount: 0, estimatedFrames };
+
+      self.postMessage({ type: 'WEBM_INIT_ACK' } as EncodeWorkerOut);
+    } catch (err) {
+      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
+      self.postMessage(out);
+    }
+    return;
+  }
+
+  if (msg.type === 'WEBM_FRAME') {
+    if (!webmState) return;
+    const { frame } = msg;
+    const { track, sceneConfig, session, coordTransform, canvas, ctx, renderer, zoom, encoderSetup } = webmState;
+    const timestampUs = frame.timestamp;
+    const timestampMs = timestampUs / 1000;
+
+    const { x: rawX, y: rawY } = getCursorAtTime(track.points, timestampMs);
+    const { x: vidX, y: vidY } = transformPoint(rawX, rawY, coordTransform);
+    const cursorX = (vidX / session.viewport.w) * sceneConfig.outputWidth;
+    const cursorY = (vidY / session.viewport.h) * sceneConfig.outputHeight;
+    const isClick = track.clicks.some((c) => Math.abs(c.t - timestampMs) < 50);
+    const camera = zoom.getCamera(timestampMs);
+
+    renderer.render(ctx, { videoSource: frame, cursorX, cursorY, isClick, clickProgress: 0, camera, t: timestampMs }, sceneConfig);
+
+    const outputFrame = new VideoFrame(canvas, {
+      timestamp: timestampUs,
+      duration: Math.round(1_000_000 / DEFAULT_OUTPUT_FRAMERATE),
+    });
+
+    while (encoderSetup.encoder.encodeQueueSize > ENCODE_MAX_QUEUE_DEPTH) {
+      await sleep(5);
+    }
+
+    const isKeyFrame = webmState.frameCount % (DEFAULT_OUTPUT_FRAMERATE * 2) === 0;
+    encoderSetup.encoder.encode(outputFrame, { keyFrame: isKeyFrame });
+    frame.close();
+    outputFrame.close();
+
+    webmState.frameCount++;
+    const progress = Math.round((webmState.frameCount / webmState.estimatedFrames) * 100);
+    self.postMessage({ type: 'PROGRESS', percent: Math.min(99, progress) } as EncodeWorkerOut);
+    self.postMessage({ type: 'WEBM_FRAME_ACK' } as EncodeWorkerOut);
+    return;
+  }
+
+  if (msg.type === 'END_WEBM_ENCODE') {
+    if (!webmState) return;
+    const { encoderSetup, muxerSetup } = webmState;
+    try {
+      await encoderSetup.encoder.flush();
+      muxerSetup.muxer.finalize();
+      const { buffer } = muxerSetup.target;
+      const doneMsg: EncodeWorkerOut = { type: 'DONE', buffer };
+      (self as unknown as Worker).postMessage(doneMsg, [buffer]);
+    } catch (err) {
+      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
+      self.postMessage(out);
+    } finally {
+      webmState = null;
+    }
+    return;
   }
 };
 

@@ -117,13 +117,23 @@ export class SceneRenderer {
         const destW = winW / camera.scale;
         const destH = winH / camera.scale;
 
-        // Natural dimensions of the source
-        const natW = isVideoEl
-          ? (src as HTMLVideoElement).videoWidth || destW
-          : destW;
-        const natH = isVideoEl
-          ? (src as HTMLVideoElement).videoHeight || destH
-          : destH;
+        // Natural dimensions of the source — must match actual pixel size for
+        // cover-crop math to be correct.
+        let natW: number;
+        let natH: number;
+        if (isVideoEl) {
+          natW = (src as HTMLVideoElement).videoWidth || destW;
+          natH = (src as HTMLVideoElement).videoHeight || destH;
+        } else if (typeof VideoFrame !== 'undefined' && src instanceof VideoFrame) {
+          natW = (src as VideoFrame).displayWidth || destW;
+          natH = (src as VideoFrame).displayHeight || destH;
+        } else if (src instanceof ImageBitmap) {
+          natW = src.width || destW;
+          natH = src.height || destH;
+        } else {
+          natW = destW;
+          natH = destH;
+        }
 
         // Cover crop: scale so the shorter dimension fills the dest, then
         // center-crop the longer dimension.  Eliminates black bars entirely.
