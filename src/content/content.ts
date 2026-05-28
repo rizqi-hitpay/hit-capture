@@ -1,11 +1,11 @@
 /**
- * Content script — cursor/pointer/scroll capture only.
- * Video recording has moved to the Offscreen Document (extension page context)
- * because getUserMedia with chromeMediaSource:'tab' is blocked by Permissions
- * Policy in content script (web page) context.
+ * Content script — cursor/pointer/scroll capture + automation runner.
+ * Video recording lives in the Offscreen Document (extension page context)
+ * because getUserMedia with chromeMediaSource:'tab' is blocked here.
  */
-import type { RawEvent, CaptureSession } from '../types';
+import type { RawEvent, CaptureSession, ContentMessage } from '../types';
 import { MOVE_INTERVAL_MS } from '../shared/constants';
+import { runAutomation } from './automation';
 
 // ─── Double-injection guard ───────────────────────────────────────────────────
 
@@ -114,7 +114,7 @@ function init(): void {
 
   chrome.runtime.onMessage.addListener(
     (message: unknown, _sender, sendResponse: (r: unknown) => void) => {
-      const msg = message as { type: string; startedAt?: string };
+      const msg = message as { type: string; startedAt?: string; commands?: import('../types').ParsedCommand[] };
 
       if (msg.type === 'PING') {
         sendResponse({ type: 'PONG' });
@@ -141,6 +141,17 @@ function init(): void {
         hideIndicator();
         const durationMs = performance.now() - recordingStartTime;
         sendResponse({ type: 'SESSION_DATA', session: buildSession(durationMs) });
+        return;
+      }
+
+      if (msg.type === 'RUN_AUTOMATION') {
+        if (!recording) { sendResponse({ type: 'ERROR', message: 'Not recording — call START_RECORDING first' }); return; }
+        const commands = msg.commands ?? [];
+        const startMs = performance.now() - recordingStartTime;
+        runAutomation(commands, startMs, (event: RawEvent) => rawEvents.push(event))
+          .catch(console.error);
+        sendResponse({ type: 'ACK' });
+        return true; // keeps channel open (response already sent, but good practice)
       }
     }
   );

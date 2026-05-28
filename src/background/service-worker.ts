@@ -8,11 +8,22 @@
  * getUserMedia with chromeMediaSource:'tab' is not blocked by Permissions Policy.
  * Cursor events are captured by the content script as before.
  */
-import type { RecordingState, ContentMessage, ContentResponse, SwMessage } from '../types';
+import type {
+  RecordingState,
+  AutomationState,
+  ContentMessage,
+  ContentResponse,
+  SwMessage,
+  ParsedCommand,
+} from '../types';
 
-const KEY_STATE     = 'recordingState';
-const KEY_TAB       = 'recordingTabId';
-const KEY_HAS_VIDEO = 'recordingHasVideo';
+const KEY_STATE        = 'recordingState';
+const KEY_TAB          = 'recordingTabId';
+const KEY_HAS_VIDEO    = 'recordingHasVideo';
+const KEY_AUTO_STATE   = 'automationState';
+const KEY_AUTO_STEP    = 'automationStep';
+const KEY_AUTO_TOTAL   = 'automationTotal';
+const KEY_AUTO_DESC    = 'automationDesc';
 
 // ─── State helpers ────────────────────────────────────────────────────────────
 
@@ -34,6 +45,20 @@ async function getTabId(): Promise<number | null> {
 async function setTabId(id: number | null): Promise<void> {
   if (id === null) await chrome.storage.session.remove(KEY_TAB);
   else             await chrome.storage.session.set({ [KEY_TAB]: id });
+}
+
+async function setAutomationState(
+  state: AutomationState,
+  step = 0,
+  total = 0,
+  description = '',
+): Promise<void> {
+  await chrome.storage.session.set({
+    [KEY_AUTO_STATE]: state,
+    [KEY_AUTO_STEP]: step,
+    [KEY_AUTO_TOTAL]: total,
+    [KEY_AUTO_DESC]: description,
+  });
 }
 
 async function getHasVideo(): Promise<boolean> {
@@ -281,22 +306,125 @@ async function toggleRecording(): Promise<void> {
   }
 }
 
+// ─── Command mode ─────────────────────────────────────────────────────────────
+
+async function runCommandMode(commands: ParsedCommand[]): Promise<void> {
+  const state = await getState();
+  if (state !== 'idle') return;
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id == null) return;
+  const tabId = tab.id;
+
+  await setState('starting');
+  await setTabId(tabId);
+  await setHasVideo(false);
+  await setAutomationState('idle');
+
+  await ensureContentScript(tabId);
+
+  const streamId = await getTabCaptureStreamId(tabId);
+  if (streamId) {
+    await ensureOffscreenDocument();
+    const resp = await sendToOffscreen({ type: 'START_VIDEO', streamId });
+    if (resp && (resp as { ok?: boolean }).ok) await setHasVideo(true);
+  }
+
+  const startedAt = new Date().toISOString();
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING', startedAt } as ContentMessage);
+  } catch {
+    // clean up on failure
+    if (await getHasVideo()) {
+      await sendToOffscreen({ type: 'STOP_VIDEO', filename: 'aborted' });
+      await closeOffscreenDocument();
+      await setHasVideo(false);
+    }
+    await setState('idle');
+    await setTabId(null);
+    return;
+  }
+
+  await setState('recording');
+  await setAutomationState('running', 0, commands.length, 'Starting…');
+
+  // Brief delay so the offscreen recorder captures a couple of frames
+  // before we start dispatching pointer events.
+  await sleep(400);
+
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'RUN_AUTOMATION', commands } as ContentMessage);
+  } catch (err) {
+    console.error('[SW] Failed to start automation:', err);
+    await stopRecording();
+    await setAutomationState('error');
+  }
+}
+
+async function handleAutomationDone(): Promise<void> {
+  await setAutomationState('done');
+  await stopRecording();
+}
+
+async function handleAutomationError(message: string): Promise<void> {
+  console.error('[SW] Automation error:', message);
+  await setAutomationState('error', 0, 0, message);
+  await stopRecording();
+}
+
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'toggle-capture') await toggleRecording();
 });
 
-chrome.runtime.onMessage.addListener((message: SwMessage, _sender, sendResponse) => {
-  if (message.type === 'TOGGLE_RECORDING') {
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  const msg = message as { type: string; step?: number; total?: number; description?: string; message?: string; commands?: ParsedCommand[] };
+
+  // ── Content script → SW (unsolicited, sender.tab is set) ──────────────────
+  if (sender.tab) {
+    if (msg.type === 'AUTOMATION_PROGRESS') {
+      chrome.storage.session.set({
+        [KEY_AUTO_STEP]: msg.step ?? 0,
+        [KEY_AUTO_TOTAL]: msg.total ?? 0,
+        [KEY_AUTO_DESC]: msg.description ?? '',
+      });
+      return;
+    }
+    if (msg.type === 'AUTOMATION_DONE') {
+      handleAutomationDone();
+      return;
+    }
+    if (msg.type === 'AUTOMATION_ERROR') {
+      handleAutomationError(msg.message ?? 'Unknown automation error');
+      return;
+    }
+    return;
+  }
+
+  // ── Popup → SW ─────────────────────────────────────────────────────────────
+  if (msg.type === 'TOGGLE_RECORDING') {
     toggleRecording().then(() => sendResponse({ type: 'OK' }));
     return true;
   }
-  if (message.type === 'GET_STATE') {
+  if (msg.type === 'GET_STATE') {
     getState().then((recordingState) => sendResponse({ type: 'STATE', recordingState }));
+    return true;
+  }
+  if (msg.type === 'RUN_COMMANDS') {
+    runCommandMode(msg.commands ?? []).then(() => sendResponse({ type: 'OK' }));
+    return true;
+  }
+  if (msg.type === 'CANCEL_AUTOMATION') {
+    stopRecording().then(() => {
+      setAutomationState('idle');
+      sendResponse({ type: 'OK' });
+    });
     return true;
   }
 });
 
 // Restore badge on SW restart
 getState().then(updateBadge);
+// Clear stale automation state
+chrome.storage.session.remove([KEY_AUTO_STATE, KEY_AUTO_STEP, KEY_AUTO_TOTAL, KEY_AUTO_DESC]);

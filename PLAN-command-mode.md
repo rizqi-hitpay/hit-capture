@@ -1,4 +1,4 @@
-# Plan: Command Mode — Synthetic Cursor from Action List
+# Plan: Command Mode — Type Commands, Auto-Record Demo
 
 **Status:** Planning
 **Branch:** main (cursor-capture branch = backup of v1)
@@ -6,219 +6,228 @@
 
 ---
 
-## Problem with v1 (Cursor Capture)
+## Vision
 
-v1 requires the user to run a live recording session: they must open the tab,
-start the extension, perform the demo, stop, then bring the video + JSON into
-the editor. The quality of the output depends entirely on how well the real
-demo went — if they hesitate, mis-click, or the cursor drifts, those artifacts
-stay in the session data.
-
-## New Direction
-
-The user provides only a screen recording. In the editor, they annotate a list
-of **commands** (click targets with timestamps) directly on top of the video.
-The system **generates** a synthetic cursor track from those commands, runs it
-through the existing 7-stage polish pipeline, and composites the polished cursor
-onto the video.
-
-Result: cursor movement that is completely intentional, always smooth, always
-hits its target — without the user ever having to move a real cursor on screen.
-
----
-
-## What Stays the Same
-
-| Component | Status |
-|---|---|
-| 7-stage polish pipeline (`src/pipeline/`) | Unchanged — takes `RawEvent[]`, doesn't care where they come from |
-| Scene renderer (`src/renderer/`) | Unchanged |
-| Encoder / export (`src/encoder/`, `src/workers/encode.worker.ts`) | Unchanged |
-| Editor shell (header, upload zone, control panel, preview canvas, export button) | Mostly unchanged |
-| `editorStore.ts` atom + phase machine | Extended, not replaced |
-
-## What Changes / Is New
-
-| Component | Change |
-|---|---|
-| `UploadZone` | JSON upload removed — only video file needed |
-| `CaptureSession` / session JSON | Replaced by `CommandSession` (new type) |
-| New: `CommandEditor` component | Timeline + click-to-target UI |
-| New: `pathGenerator.ts` | Generates synthetic `RawEvent[]` from command list |
-| New: `commandStore.ts` | Reactive state for the command list |
-| `editorStore.ts` | Wired to `commandStore` instead of session JSON |
-
----
-
-## New User Flow
+The user types a sequence of actions in plain text:
 
 ```
-1. User uploads screen recording (.mp4 / .webm)
-2. Editor loads, shows the video in the preview canvas (no cursor yet)
-3. User scrubs to the moment of an action → clicks "Add Command"
-4. User clicks directly on the video frame to set the target (X, Y)
-5. User labels it: "Click Payment Link"
-6. Repeat for each action in the demo
-7. User clicks "Generate" → pathGenerator creates RawEvents → pipeline runs
-8. Preview shows polished cursor animated between all targets
-9. Adjust smoothing / timing sliders → live re-generate
-10. Export MP4
+click "Payment Links"
+click "+ New Payment Link"
+type "Summer Sale" in "Link Title"
+click "Create"
+```
+
+The extension **executes those actions on the live tab**, moves a synthetic
+cursor to each target, and **records the screen + cursor path simultaneously**.
+The recording goes straight into the polish pipeline and gets exported as a
+polished marketing video — no manual cursor work, no after-the-fact annotation.
+
+---
+
+## How It Differs from v1
+
+| | v1 (Cursor Capture) | v2 (Command Mode) |
+|---|---|---|
+| Cursor data source | Real mouse recorded by user | Synthesised by automation engine |
+| Screen recording | User records separately (Loom, etc.) | Extension records automatically |
+| User effort | Perform demo live, hope it's clean | Type commands once, replay perfectly every time |
+| Repeatability | One-shot | Re-run anytime, always identical |
+
+The polish pipeline, renderer, and encoder are **unchanged** — they still take
+`RawEvent[]` and produce a polished MP4. The difference is where those events
+come from: synthesised from automation rather than recorded from a real mouse.
+
+---
+
+## Flow
+
+```
+1. User opens the extension popup on the target tab
+2. User types commands in the command input panel
+3. User clicks "Run & Record"
+4. Extension starts tab capture (same as v1 offscreen recording)
+5. Content script executes each command in sequence:
+     a. Find target element by text / selector
+     b. Generate smooth cursor path from current position to element centre
+     c. Dispatch pointermove events along the path (recorded by content script)
+     d. Dwell briefly at the target
+     e. Dispatch real click event → page responds naturally
+     f. Wait for navigation / animation to settle
+6. Recording stops automatically after the last command
+7. Editor opens with the video + generated cursor session
+8. User adjusts style (gradient, zoom sensitivity) → Export MP4
 ```
 
 ---
 
 ## Architecture
 
-### New Types (`src/types/index.ts`)
+### New: Command Parser (`src/commands/parser.ts`)
+
+Parses a plain-text command script into a structured list:
 
 ```typescript
-export type CommandType = 'click' | 'move' | 'scroll-down' | 'scroll-up';
-
-export interface Command {
-  id: string;
-  type: CommandType;
-  /** Target position in VIDEO pixel space (same coords as polishedTrack) */
-  x: number;
-  y: number;
-  /** When this action happens, in ms from video start */
-  videoTimestampMs: number;
-  /** Optional display label */
-  label?: string;
-}
-
-export interface CommandSession {
-  version: 2;
-  commands: Command[];
-  /** Video dimensions — needed to compute coordTransform */
-  videoWidth: number;
-  videoHeight: number;
+interface ParsedCommand {
+  type: 'click' | 'type' | 'scroll' | 'wait' | 'hover';
+  target?: string;   // text to find on screen, e.g. "Payment Links"
+  value?: string;    // for 'type' commands
+  ms?: number;       // for 'wait' commands
 }
 ```
 
-### Path Generator (`src/pipeline/pathGenerator.ts`)
+Simple line-by-line parser. Supports:
+- `click "label"` — find element containing text, click it
+- `type "value" in "label"` — find input by label/placeholder, type into it
+- `scroll down [N]` / `scroll up [N]` — scroll the page
+- `wait [N]ms` — pause between actions
+- `hover "label"` — move cursor to element without clicking
 
-Converts a `CommandSession` into `RawEvent[]` that the existing pipeline can consume.
+### New: Automation Engine (`src/content/automation.ts`)
 
-```
-For each command[i]:
-  - Fill time between command[i-1] and command[i] with move events
-    (linear or gentle arc, at 250 Hz to match CAPTURE_HZ)
-  - At command[i].videoTimestampMs: emit pointerdown + pointerup at (x, y)
-
-Edge cases:
-  - Before first command: hold cursor at first command position
-  - After last command: hold cursor at last position until video end
-```
-
-The generated `RawEvent[]` is fed into `runPipeline()` exactly as before.
-The pipeline smooths the straight-line moves into natural Catmull-Rom curves,
-detects dwells, choreographs click overshoots, etc.
-
-### CommandEditor component (`src/editor/components/CommandEditor.ts`)
-
-- Rendered in the left sidebar (replaces or extends `ControlPanel`)
-- Shows a scrollable list of commands with timestamp, label, and (x, y)
-- **"Add" button**: pauses the video, enters "pick" mode
-  - User clicks on the preview canvas to set the target point
-  - A crosshair overlay indicates pick mode
-  - On click: command is added at the current video timestamp
-- Each command row has: timestamp pill, label input, delete button
-- "Generate" button triggers `pathGenerator` → `schedulePipeline()`
-- Commands are sorted by `videoTimestampMs` automatically
-
-### State Flow
+Injected into the active tab alongside the existing content script.
+Receives a `ParsedCommand[]` from the service worker and executes them:
 
 ```
-CommandEditor                 commandStore                 editorStore
------------                   ------------                 -----------
-User adds command ──────────► setCommands([...]) ────────► (debounced)
-User edits timestamp ────────► updateCommand(id, patch)      │
-User clicks "Generate" ──────►                         schedulePipeline()
-                                                              │
-                                                        pathGenerator(commands)
-                                                        → RawEvent[]
-                                                              │
-                                                        pipeline worker
-                                                        → PolishedTrack
-                                                              │
-                                                        phase = 'ready'
-                                                        → canvas renders
+For each command:
+  1. Find element  →  getElementByText(target)
+  2. Get position  →  element.getBoundingClientRect() → centre (x, y)
+  3. Generate path →  bezierPath(currentPos, targetPos, durationMs)
+  4. Emit moves    →  dispatchPointermove() at 250 Hz along path (recorded by content.ts)
+  5. Dwell         →  pause ~200ms at target (triggers dwell detection in pipeline)
+  6. Execute       →  element.dispatchEvent(new PointerEvent('pointerdown')) + click()
+  7. Wait          →  wait for DOM settle or explicit wait duration
+  8. Loop
+```
+
+The path between commands is a **cubic Bézier** with a randomised control
+point offset — gives a natural arc instead of a mechanical straight line.
+
+### Updated: Content Script (`src/content/content.ts`)
+
+Minor update only: expose a `startAutomation(commands)` message handler that
+launches `automation.ts`. The pointer event recording is already in place — no
+changes needed to the capture logic.
+
+### Updated: Service Worker (`src/background/service-worker.ts`)
+
+New message type: `RUN_COMMANDS { commands: ParsedCommand[] }`:
+1. Calls `getTabCaptureStreamId` and starts offscreen recording (same as v1)
+2. Sends `RUN_AUTOMATION` to the content script with the parsed commands
+3. Listens for `AUTOMATION_DONE` → calls `STOP_VIDEO` on offscreen
+4. Downloads video + session JSON (same as v1)
+
+### Updated: Popup (`src/popup/`)
+
+Replaces the simple Start/Stop button with a command input UI:
+- Multi-line `<textarea>` for the command script
+- "Run & Record" button
+- Status display (idle → running → step N of M → done)
+- Command history (last 5 scripts)
+
+### Pipeline & Editor (Unchanged)
+
+The `RawEvent[]` produced by the automation engine feed directly into
+`runPipeline()`. The editor, renderer, encoder, and export flow are identical
+to v1 — the pipeline doesn't know or care that the events were synthetic.
+
+---
+
+## Component Breakdown
+
+```
+src/
+  commands/
+    parser.ts          Parse plain-text script → ParsedCommand[]
+    runner.ts          Execute ParsedCommand[] in the content script context
+    elementFinder.ts   Find DOM elements by visible text / role / placeholder
+    pathGenerator.ts   Generate Bezier cursor path between two points at 250 Hz
+  content/
+    content.ts         (updated) add RUN_AUTOMATION message handler
+    automation.ts      (new) drives runner.ts, dispatches pointer events
+  popup/
+    popup.html         (updated) command textarea + Run button
+    popup.ts           (updated) parse → send to SW
+  background/
+    service-worker.ts  (updated) RUN_COMMANDS handler
+  pipeline/            (unchanged)
+  renderer/            (unchanged)
+  encoder/             (unchanged)
+  editor/              (unchanged)
 ```
 
 ---
 
 ## Todo List
 
-### Phase 1 — Core (MVP)
+### Phase 1 — Core Pipeline
 
-#### Types & Data
-- [ ] Add `Command`, `CommandSession` to `src/types/index.ts`
-- [ ] Remove `CaptureSession` dependency from the editor flow (keep type for possible future re-import)
+#### Command Parser
+- [ ] `src/commands/parser.ts` — parse `click "X"`, `type "V" in "X"`, `wait Nms`, `scroll down/up`
+- [ ] Unit tests for parser edge cases (quoted strings, case insensitivity, blank lines)
+
+#### Element Finder
+- [ ] `src/commands/elementFinder.ts`
+  - [ ] `findByText(text)` — search visible text in buttons, links, inputs, roles
+  - [ ] `findByPlaceholder(text)` — for type commands targeting inputs
+  - [ ] Ranking: prefer exact match > partial match; prefer interactive elements
+  - [ ] Return `{ element, x, y }` where x/y is the element's visible centre
 
 #### Path Generator
-- [ ] Create `src/pipeline/pathGenerator.ts`
-  - [ ] `generateRawEvents(commands, videoWidth, videoHeight): RawEvent[]`
-  - [ ] Linear interpolation between command targets at 250 Hz
-  - [ ] Inject `pointerdown` + `pointerup` at each command timestamp
-  - [ ] Handle edge cases: empty commands, single command, out-of-order (sort first)
-- [ ] Unit test path generator with a 3-command sequence
+- [ ] `src/commands/pathGenerator.ts`
+  - [ ] `cubicBezierPath(from, to, durationMs, hz): RawEvent[]`
+  - [ ] Random arc offset for natural-looking curves (not perfectly straight)
+  - [ ] Inject dwell events (no movement) at destination before click
 
-#### Command State
-- [ ] Create `src/editor/state/commandStore.ts`
-  - [ ] `commands: Command[]` atom
-  - [ ] `addCommand(cmd)`, `updateCommand(id, patch)`, `removeCommand(id)`, `clearCommands()`
-  - [ ] Auto-sort by `videoTimestampMs` on every mutation
-- [ ] Wire `commandStore` changes into `editorStore.schedulePipeline()`
-  - [ ] Pass `viewport: { w: videoWidth, h: videoHeight, dpr: 1 }` from `CommandSession`
+#### Automation Runner
+- [ ] `src/commands/runner.ts` — async loop over `ParsedCommand[]`
+  - [ ] For each `click`: find element → generate path → dispatch pointermoves → dispatch click
+  - [ ] For each `type`: find input → click it → dispatch keydown/input/keyup per character
+  - [ ] For each `scroll`: dispatch wheel events, emit scroll RawEvents
+  - [ ] For each `wait`: setTimeout(ms)
+  - [ ] Post `AUTOMATION_PROGRESS { step, total }` back to SW after each command
+  - [ ] Post `AUTOMATION_DONE` when finished
 
-#### Editor Integration
-- [ ] Update `editorStore.tryProcessFiles()`:
-  - [ ] Remove session JSON requirement — process on video upload alone
-  - [ ] Derive `viewport` from `video.videoWidth / videoHeight` directly
-  - [ ] Replace `runPipeline(session.events, ...)` with `runPipeline(generateRawEvents(commands), ...)`
-- [ ] Update `UploadZone`: remove JSON upload button / hint
+#### Content Script Integration
+- [ ] Add `RUN_AUTOMATION` message handler to `content.ts`
+- [ ] Import and call `runner.ts` from content context
+- [ ] Ensure pointer events dispatched by automation are captured by existing recorder
 
-#### CommandEditor Component
-- [ ] Create `src/editor/components/CommandEditor.ts`
-  - [ ] Renders in sidebar
-  - [ ] "Add Command" button → enters pick mode (sets a flag in store)
-  - [ ] Click-to-pick overlay on the preview canvas (shows crosshair cursor)
-  - [ ] On canvas click: read canvas coordinates → convert to video pixel space → create `Command`
-  - [ ] Command list: each row shows timestamp (editable), label (editable), type selector, delete button
-  - [ ] "Generate" button → triggers re-run of pipeline
-- [ ] Mount `CommandEditor` in `editor.ts` (replace or extend ControlPanel sidebar)
+#### Service Worker Integration
+- [ ] Add `RUN_COMMANDS` message handler
+- [ ] Sequence: start tab capture → send `RUN_AUTOMATION` to content → await `AUTOMATION_DONE` → stop recording
+- [ ] Handle errors: element not found → report back, stop recording cleanly
 
-#### Coordinate Mapping
-- [ ] When user clicks the preview canvas in pick mode:
-  - [ ] Canvas is at `PREVIEW_SCALE` (0.5) of video resolution
-  - [ ] Map canvas click `(cx, cy)` → video pixel `(cx / PREVIEW_SCALE, cy / PREVIEW_SCALE)`
-  - [ ] Store as `Command.x`, `Command.y`
+#### Popup UI
+- [ ] `popup.html` — replace Start/Stop with command textarea + "Run & Record" button
+- [ ] `popup.ts` — on click: parse commands → send `RUN_COMMANDS` to SW
+- [ ] Status display: "Step 2/4: clicking '+ New Payment Link'…"
+- [ ] Disable button while running; show Cancel option
 
 ---
 
-### Phase 2 — Polish & UX
+### Phase 2 — Robustness & UX
 
-- [ ] **Visual feedback**: Draw the synthetic cursor path on the preview canvas as a dotted line connecting all command targets (so user can see the planned route before generating)
-- [ ] **Timestamp sync**: "Use current time" button next to each command → sets `videoTimestampMs` to `video.currentTime * 1000`
-- [ ] **Command templates**: pre-built command types (Hover, Scroll Down 300px, Type text)
-- [ ] **Timeline view**: horizontal timeline below the scrubber showing command markers at their timestamps — drag to reposition
-- [ ] **Import/export**: save the command list as `commands.json` so demos can be re-edited later
-- [ ] **Undo/redo**: command history stack
-- [ ] **Before/after**: toggle between "no cursor" and "polished cursor" (already exists, keep it)
+- [ ] **Wait for navigation**: after a click that triggers page load, wait for `document.readyState === 'complete'` before next step
+- [ ] **Wait for element**: if element not found immediately, retry for up to 3 seconds (handles lazy-loaded UI)
+- [ ] **Error reporting**: show which command failed and why in the popup
+- [ ] **Command history**: save last 5 scripts in `chrome.storage.local`; load from dropdown
+- [ ] **Dry run mode**: highlight elements on the page one by one without clicking — lets user verify targets before recording
+- [ ] **Scroll tracking**: record scroll position changes in `RawEvent[]` so the pipeline can reflect them in the cursor choreography
 
 ---
 
-### Phase 3 — Stretch
+### Phase 3 — Intelligence
 
-- [ ] **Smart path**: instead of straight-line interpolation, use a natural arc (offset the midpoint perpendicular to the direction of travel) for more human-like paths
-- [ ] **Scroll animation**: render a scroll indicator overlay (not just a cursor move) for scroll commands
-- [ ] **Click label overlays**: optionally render the command label as a callout bubble on the video at the moment of the click
-- [ ] **OCR-assisted target picking**: user types "Payment Link" and the editor finds the text in the current video frame and suggests coordinates (requires a small OCR library or cloud call)
+- [ ] **Natural language commands** via Claude API: `"go to the payment links page and create a new one called Summer Sale"` → parsed to structured steps automatically
+- [ ] **Auto-wait heuristics**: detect when page is animating (MutationObserver) and wait for DOM to settle between steps
+- [ ] **Element screenshot preview**: in popup, show a thumbnail of the found element before running, so user can confirm it's the right one
+- [ ] **Script templates**: pre-built scripts for common SaaS flows (create item, edit item, delete item, navigate to settings)
 
 ---
 
 ## Open Questions
 
-1. Should we keep the v1 cursor-capture extension as an _alternative_ input mode (upload recording + JSON session) alongside command mode? Or deprecate it entirely?
-2. For scroll commands — should the cursor move to a scroll zone and the video content scroll naturally (since the video is pre-recorded), or should we add a scroll indicator overlay?
-3. Command label callouts (Phase 3) — HTML overlay on the canvas, or baked into the MP4 export?
+1. **Element finding accuracy**: text-based element search can be ambiguous (two buttons with similar labels). Do we add a `#selector` syntax as a fallback? e.g. `click #new-payment-link-btn`
+2. **Scrolling**: when the target element is off-screen, should automation scroll to it first, or fail with a helpful error?
+3. **iframes**: HitPay's frontend likely has no cross-origin iframes, but should we document the limitation?
+4. **Typing speed**: should `type` commands type at a human-like speed (with delays between keys, visible in the recording), or instantly?

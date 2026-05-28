@@ -212,22 +212,46 @@ export type EncodeWorkerOut =
   | { type: 'DONE'; buffer: ArrayBuffer }
   | { type: 'ERROR'; message: string };
 
+// ─── Command mode ─────────────────────────────────────────────────────────────
+
+export interface ParsedCommand {
+  type: 'click' | 'type' | 'scroll' | 'wait' | 'hover';
+  target?: string;
+  value?: string;
+  ms?: number;
+  direction?: 'up' | 'down';
+  amount?: number;
+}
+
+export type AutomationState = 'idle' | 'running' | 'done' | 'error';
+
 // ─── Extension messaging ──────────────────────────────────────────────────────
 
 export type RecordingState = 'idle' | 'starting' | 'recording' | 'stopping';
 
 export type SwMessage =
   | { type: 'TOGGLE_RECORDING' }
-  | { type: 'GET_STATE' };
+  | { type: 'GET_STATE' }
+  | { type: 'RUN_COMMANDS'; commands: ParsedCommand[] }
+  | { type: 'CANCEL_AUTOMATION' };
 
 export type SwResponse =
   | { type: 'STATE'; recordingState: RecordingState }
-  | { type: 'OK' };
+  | { type: 'OK' }
+  | { type: 'ERROR'; message: string };
 
 export type ContentMessage =
-  | { type: 'START_RECORDING'; startedAt: string; streamId?: string }
-  | { type: 'STOP_RECORDING' };
+  | { type: 'START_RECORDING'; startedAt: string }
+  | { type: 'STOP_RECORDING' }
+  | { type: 'RUN_AUTOMATION'; commands: ParsedCommand[] };
 
 export type ContentResponse =
   | { type: 'SESSION_DATA'; session: CaptureSession }
+  | { type: 'ACK' }
   | { type: 'ERROR'; message: string };
+
+/** Unsolicited messages sent from the content script to the service worker. */
+export type ContentToSwMessage =
+  | { type: 'AUTOMATION_PROGRESS'; step: number; total: number; description: string }
+  | { type: 'AUTOMATION_DONE' }
+  | { type: 'AUTOMATION_ERROR'; message: string };

@@ -12,22 +12,47 @@
       <span class="title">Cursor Capture</span>
     </div>
 
-    <div class="status-row">
-      <span class="status-dot" id="status-dot"></span>
-      <span class="status-label" id="status-label">Ready</span>
+    <!-- Command input panel -->
+    <div id="panel-command" class="panel">
+      <label class="field-label" for="cmd-input">Commands</label>
+      <textarea
+        id="cmd-input"
+        class="cmd-textarea"
+        spellcheck="false"
+        placeholder='click "Payment Links"
+click "+ New Payment Link"
+type "Summer Sale" in "Link Title"
+click "Create"'
+      ></textarea>
+      <div class="parse-errors" id="parse-errors"></div>
+      <button class="btn-run" id="btn-run">▶ Run &amp; Record</button>
     </div>
 
-    <button class="btn-record" id="btn-record" disabled>
-      <span id="btn-label">Start Recording</span>
-    </button>
+    <!-- Running status panel -->
+    <div id="panel-running" class="panel" hidden>
+      <div class="status-row">
+        <span class="status-dot status-recording" id="status-dot"></span>
+        <span class="status-label" id="status-label">Starting…</span>
+      </div>
+      <div class="progress-row" id="progress-row">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <span class="progress-text" id="progress-text">0 / 0</span>
+      </div>
+      <div class="step-desc" id="step-desc"></div>
+      <button class="btn-cancel" id="btn-cancel">Cancel</button>
+    </div>
 
-    <div class="hint" id="hint">
-      Records screen + cursor together<br/>
-      Cmd+Shift+R to toggle
+    <!-- Done panel -->
+    <div id="panel-done" class="panel" hidden>
+      <div class="done-msg">
+        <span class="done-icon">✓</span>
+        Recording saved. Open the Editor to polish and export.
+      </div>
     </div>
 
     <hr class="divider" />
-
     <button class="btn-editor" id="btn-editor">Open Editor →</button>
 
     <script type="module" src="popup.ts"></script>

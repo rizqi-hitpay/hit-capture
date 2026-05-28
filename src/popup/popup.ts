@@ -1,66 +1,131 @@
-import type { RecordingState, SwMessage, SwResponse } from '../types';
+import { parseCommands } from '../commands/parser';
+import type { SwMessage } from '../types';
 
-const btnRecord = document.getElementById('btn-record') as HTMLButtonElement;
-const btnEditor = document.getElementById('btn-editor') as HTMLButtonElement;
-const statusDot = document.getElementById('status-dot') as HTMLSpanElement;
-const statusLabel = document.getElementById('status-label') as HTMLSpanElement;
-const btnLabel = document.getElementById('btn-label') as HTMLSpanElement;
+// ─── Elements ─────────────────────────────────────────────────────────────────
 
-// ─── State rendering ──────────────────────────────────────────────────────────
+const panelCommand = document.getElementById('panel-command') as HTMLDivElement;
+const panelRunning = document.getElementById('panel-running') as HTMLDivElement;
+const panelDone    = document.getElementById('panel-done')    as HTMLDivElement;
 
-function render(state: RecordingState): void {
-  statusDot.className = `status-dot status-${state}`;
-  switch (state) {
-    case 'idle':
-      statusLabel.textContent = 'Ready';
-      btnLabel.textContent = 'Start Recording';
-      btnRecord.disabled = false;
-      btnRecord.className = 'btn-record btn-start';
-      break;
-    case 'starting':
-      statusLabel.textContent = 'Starting…';
-      btnLabel.textContent = 'Starting…';
-      btnRecord.disabled = true;
-      break;
-    case 'recording':
-      statusLabel.textContent = 'Recording';
-      btnLabel.textContent = 'Stop Recording';
-      btnRecord.disabled = false;
-      btnRecord.className = 'btn-record btn-stop';
-      break;
-    case 'stopping':
-      statusLabel.textContent = 'Saving…';
-      btnLabel.textContent = 'Saving…';
-      btnRecord.disabled = true;
-      break;
+const cmdInput    = document.getElementById('cmd-input')     as HTMLTextAreaElement;
+const parseErrors = document.getElementById('parse-errors')  as HTMLDivElement;
+const btnRun      = document.getElementById('btn-run')       as HTMLButtonElement;
+
+const statusDot   = document.getElementById('status-dot')    as HTMLSpanElement;
+const statusLabel = document.getElementById('status-label')  as HTMLSpanElement;
+const progressFill = document.getElementById('progress-fill') as HTMLDivElement;
+const progressText = document.getElementById('progress-text') as HTMLSpanElement;
+const stepDesc    = document.getElementById('step-desc')     as HTMLDivElement;
+const btnCancel   = document.getElementById('btn-cancel')    as HTMLButtonElement;
+const btnEditor   = document.getElementById('btn-editor')    as HTMLButtonElement;
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+
+function showPanel(name: 'command' | 'running' | 'done'): void {
+  panelCommand.hidden = name !== 'command';
+  panelRunning.hidden = name !== 'running';
+  panelDone.hidden    = name !== 'done';
+}
+
+function setProgress(step: number, total: number, description: string): void {
+  const pct = total > 0 ? Math.round((step / total) * 100) : 0;
+  progressFill.style.width = `${pct}%`;
+  progressText.textContent = `${step} / ${total}`;
+  stepDesc.textContent = description;
+  statusLabel.textContent = `Step ${step} of ${total}`;
+}
+
+// ─── Live parse feedback ───────────────────────────────────────────────────────
+
+cmdInput.addEventListener('input', () => {
+  const { errors } = parseCommands(cmdInput.value);
+  if (errors.length === 0) {
+    parseErrors.textContent = '';
+  } else {
+    parseErrors.textContent = errors
+      .map((e) => `Line ${e.line}: ${e.reason}`)
+      .join('\n');
   }
-}
+  btnRun.disabled = errors.length > 0 || cmdInput.value.trim() === '';
+});
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ─── Run & Record ─────────────────────────────────────────────────────────────
 
-async function init(): Promise<void> {
-  const msg: SwMessage = { type: 'GET_STATE' };
-  const response = (await chrome.runtime.sendMessage(msg)) as SwResponse;
-  if (response.type === 'STATE') render(response.recordingState);
+btnRun.addEventListener('click', async () => {
+  const { commands, errors } = parseCommands(cmdInput.value);
+  if (errors.length > 0 || commands.length === 0) return;
 
-  // Keep UI in sync while popup is open
-  chrome.storage.session.onChanged.addListener((changes) => {
-    if ('recordingState' in changes) {
-      render(changes['recordingState'].newValue as RecordingState);
-    }
-  });
-}
+  showPanel('running');
+  statusLabel.textContent = 'Starting…';
+  setProgress(0, commands.length, 'Preparing…');
 
-// ─── Button handlers ──────────────────────────────────────────────────────────
-
-btnRecord.addEventListener('click', async () => {
-  const msg: SwMessage = { type: 'TOGGLE_RECORDING' };
+  const msg: SwMessage = { type: 'RUN_COMMANDS', commands };
   await chrome.runtime.sendMessage(msg);
 });
+
+// ─── Cancel ───────────────────────────────────────────────────────────────────
+
+btnCancel.addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'CANCEL_AUTOMATION' } as SwMessage);
+  showPanel('command');
+});
+
+// ─── Open Editor ──────────────────────────────────────────────────────────────
 
 btnEditor.addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/editor/editor.html') });
   window.close();
 });
+
+// ─── Session storage listener — react to SW state changes ─────────────────────
+
+chrome.storage.session.onChanged.addListener((changes) => {
+  if ('automationState' in changes) {
+    const state = changes['automationState'].newValue as string | undefined;
+    if (state === 'running') {
+      showPanel('running');
+    } else if (state === 'done') {
+      showPanel('done');
+    } else if (state === 'error') {
+      showPanel('command');
+      const desc = changes['automationDesc']?.newValue as string | undefined;
+      parseErrors.textContent = desc ?? 'Automation failed.';
+    }
+  }
+
+  if ('automationStep' in changes || 'automationTotal' in changes || 'automationDesc' in changes) {
+    chrome.storage.session.get(
+      ['automationStep', 'automationTotal', 'automationDesc'],
+      (items) => {
+        const step  = (items['automationStep']  as number | undefined) ?? 0;
+        const total = (items['automationTotal'] as number | undefined) ?? 0;
+        const desc  = (items['automationDesc']  as string | undefined) ?? '';
+        setProgress(step, total, desc);
+      }
+    );
+  }
+});
+
+// ─── Init — restore state if popup reopened while running ─────────────────────
+
+async function init(): Promise<void> {
+  const items = await chrome.storage.session.get([
+    'automationState', 'automationStep', 'automationTotal', 'automationDesc',
+  ]);
+  const state = items['automationState'] as string | undefined;
+  if (state === 'running') {
+    showPanel('running');
+    setProgress(
+      (items['automationStep']  as number | undefined) ?? 0,
+      (items['automationTotal'] as number | undefined) ?? 0,
+      (items['automationDesc']  as string | undefined) ?? '',
+    );
+  } else if (state === 'done') {
+    showPanel('done');
+  } else {
+    showPanel('command');
+    btnRun.disabled = cmdInput.value.trim() === '';
+  }
+}
 
 init();
