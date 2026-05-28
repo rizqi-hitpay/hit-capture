@@ -165,6 +165,7 @@ html, body {
   align-items: center;
   justify-content: center;
   padding: 24px;
+  padding-bottom: 80px; /* room for fixed playback bar */
   overflow: hidden;
   background: var(--bg);
 }
@@ -206,11 +207,23 @@ html, body {
   gap: 16px;
 }
 
-/* Playback controls */
+/* Playback controls — fixed to bottom of preview column */
 .playback-controls {
+  position: fixed;
+  bottom: 20px;
+  /* Center within the preview column (right of sidebar) */
+  left: calc(var(--sidebar-w) + (100vw - var(--sidebar-w)) / 2);
+  transform: translateX(-50%);
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 10px;
+  background: rgba(24, 24, 40, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 14px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
 }
 
 .btn-play {
@@ -227,7 +240,7 @@ html, body {
 .btn-play:hover { background: var(--border); }
 
 .scrubber {
-  width: 280px;
+  width: 340px;
   height: 4px;
   accent-color: var(--accent);
   cursor: pointer;
