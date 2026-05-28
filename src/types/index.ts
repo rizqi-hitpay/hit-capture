@@ -233,6 +233,7 @@ export type SwMessage =
   | { type: 'TOGGLE_RECORDING' }
   | { type: 'GET_STATE' }
   | { type: 'RUN_COMMANDS'; commands: ParsedCommand[] }
+  | { type: 'RUN_DRY_RUN'; commands: ParsedCommand[] }
   | { type: 'CANCEL_AUTOMATION' };
 
 export type SwResponse =
@@ -243,7 +244,8 @@ export type SwResponse =
 export type ContentMessage =
   | { type: 'START_RECORDING'; startedAt: string }
   | { type: 'STOP_RECORDING' }
-  | { type: 'RUN_AUTOMATION'; commands: ParsedCommand[] };
+  | { type: 'RUN_AUTOMATION'; commands: ParsedCommand[] }
+  | { type: 'RUN_DRY_RUN'; commands: ParsedCommand[] };
 
 export type ContentResponse =
   | { type: 'SESSION_DATA'; session: CaptureSession }
@@ -254,4 +256,6 @@ export type ContentResponse =
 export type ContentToSwMessage =
   | { type: 'AUTOMATION_PROGRESS'; step: number; total: number; description: string }
   | { type: 'AUTOMATION_DONE' }
-  | { type: 'AUTOMATION_ERROR'; message: string };
+  | { type: 'AUTOMATION_ERROR'; message: string }
+  | { type: 'DRY_RUN_STEP'; step: number; total: number; description: string; found: boolean }
+  | { type: 'DRY_RUN_DONE' };

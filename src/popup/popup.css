@@ -21,9 +21,11 @@ body {
 
 .logo { font-size: 18px; }
 
-/* ─── Command panel ─────────────────────────────────────────────── */
+/* ─── Panels ────────────────────────────────────────────────────── */
 
 .panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* ─── Command panel ─────────────────────────────────────────────── */
 
 .field-label {
   font-size: 10px;
@@ -33,9 +35,28 @@ body {
   color: #4a5568;
 }
 
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-select {
+  flex: 1;
+  background: #0f0f1e;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+  padding: 4px 6px;
+  outline: none;
+}
+.history-select:focus { border-color: #6366f1; }
+.history-select option { background: #1a1a2e; }
+
 .cmd-textarea {
   width: 100%;
-  height: 120px;
+  height: 118px;
   background: #0f0f1e;
   border: 1px solid #2d3748;
   border-radius: 8px;
@@ -53,11 +74,31 @@ body {
   color: #fc8181;
   line-height: 1.4;
   min-height: 0;
+  white-space: pre-wrap;
 }
 
+.btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-dry {
+  flex: 1;
+  padding: 8px 0;
+  background: transparent;
+  border: 1px solid #4a5568;
+  border-radius: 8px;
+  color: #94a3b8;
+  font: 600 12px system-ui, sans-serif;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-dry:hover:not(:disabled) { background: #2d3748; color: #e2e8f0; border-color: #6366f1; }
+.btn-dry:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .btn-run {
-  width: 100%;
-  padding: 9px 0;
+  flex: 2;
+  padding: 8px 0;
   background: #6366f1;
   color: #fff;
   border: none;
@@ -89,6 +130,10 @@ body {
 }
 .status-dot.status-recording {
   background: #e53e3e;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.status-dot.status-dry {
+  background: #f6ad55;
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -132,6 +177,28 @@ body {
   line-height: 1.4;
 }
 
+/* Dry-run checklist */
+.dry-checklist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.dry-checklist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.dry-ok   { color: #68d391; flex-shrink: 0; }
+.dry-fail { color: #fc8181; flex-shrink: 0; }
+.dry-skip { color: #4a5568; flex-shrink: 0; }
+
 .btn-cancel {
   background: transparent;
   border: 1px solid #2d3748;
@@ -156,18 +223,36 @@ body {
   line-height: 1.5;
 }
 
-.done-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-  line-height: 1.3;
+.done-icon { font-size: 16px; flex-shrink: 0; line-height: 1.3; }
+
+/* ─── Error panel ────────────────────────────────────────────────── */
+
+.error-msg {
+  font-size: 12px;
+  color: #fc8181;
+  line-height: 1.5;
+  background: rgba(252,129,129,0.08);
+  border: 1px solid rgba(252,129,129,0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
 }
+
+.btn-back {
+  background: transparent;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 6px 0;
+  width: 100%;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-back:hover { background: #2d3748; color: #e2e8f0; }
 
 /* ─── Footer ────────────────────────────────────────────────────── */
 
-.divider {
-  border: none;
-  border-top: 1px solid #2d3748;
-}
+.divider { border: none; border-top: 1px solid #2d3748; }
 
 .btn-editor {
   background: transparent;

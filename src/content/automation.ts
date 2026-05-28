@@ -1,14 +1,7 @@
 import type { ParsedCommand } from '../commands/parser';
-import { runCommands } from '../commands/runner';
+import { runCommands, dryRunCommands } from '../commands/runner';
 import type { RawEvent } from '../types';
 
-/**
- * Executes a parsed command list in the content script context.
- * Synthetic cursor events are fed directly into `onEvent` (the content
- * script's rawEvents array). Real clicks are dispatched to the DOM.
- * Progress and completion are signalled back to the service worker via
- * chrome.runtime.sendMessage.
- */
 export async function runAutomation(
   commands: ParsedCommand[],
   startMs: number,
@@ -21,7 +14,7 @@ export async function runAutomation(
         step,
         total,
         description,
-      }).catch(() => { /* popup may be closed */ });
+      }).catch(() => {});
     },
     onEvent,
   });
@@ -31,4 +24,18 @@ export async function runAutomation(
   } else {
     chrome.runtime.sendMessage({ type: 'AUTOMATION_ERROR', message: result.error }).catch(() => {});
   }
+}
+
+/** Dry-run: find & highlight each target without recording or clicking. */
+export async function runDryRun(commands: ParsedCommand[]): Promise<void> {
+  await dryRunCommands(commands, (result) => {
+    chrome.runtime.sendMessage({
+      type: 'DRY_RUN_STEP',
+      step: result.step,
+      total: commands.length,
+      description: result.description,
+      found: result.found,
+    }).catch(() => {});
+  });
+  chrome.runtime.sendMessage({ type: 'DRY_RUN_DONE' }).catch(() => {});
 }

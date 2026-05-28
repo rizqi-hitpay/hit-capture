@@ -5,7 +5,7 @@
  */
 import type { RawEvent, CaptureSession, ContentMessage } from '../types';
 import { MOVE_INTERVAL_MS } from '../shared/constants';
-import { runAutomation } from './automation';
+import { runAutomation, runDryRun } from './automation';
 
 // ─── Double-injection guard ───────────────────────────────────────────────────
 
@@ -151,7 +151,14 @@ function init(): void {
         runAutomation(commands, startMs, (event: RawEvent) => rawEvents.push(event))
           .catch(console.error);
         sendResponse({ type: 'ACK' });
-        return true; // keeps channel open (response already sent, but good practice)
+        return;
+      }
+
+      if (msg.type === 'RUN_DRY_RUN') {
+        const commands = msg.commands ?? [];
+        runDryRun(commands).catch(console.error);
+        sendResponse({ type: 'ACK' });
+        return;
       }
     }
   );

@@ -14,6 +14,13 @@
 
     <!-- Command input panel -->
     <div id="panel-command" class="panel">
+      <div class="history-row" id="history-row" hidden>
+        <label class="field-label" for="history-select">Recent</label>
+        <select id="history-select" class="history-select">
+          <option value="">— load script —</option>
+        </select>
+      </div>
+
       <label class="field-label" for="cmd-input">Commands</label>
       <textarea
         id="cmd-input"
@@ -24,23 +31,32 @@ click "+ New Payment Link"
 type "Summer Sale" in "Link Title"
 click "Create"'
       ></textarea>
+
       <div class="parse-errors" id="parse-errors"></div>
-      <button class="btn-run" id="btn-run">▶ Run &amp; Record</button>
+
+      <div class="btn-row">
+        <button class="btn-dry" id="btn-dry" disabled>Dry Run</button>
+        <button class="btn-run" id="btn-run" disabled>▶ Run &amp; Record</button>
+      </div>
     </div>
 
-    <!-- Running status panel -->
+    <!-- Running / dry-run status panel -->
     <div id="panel-running" class="panel" hidden>
       <div class="status-row">
         <span class="status-dot status-recording" id="status-dot"></span>
         <span class="status-label" id="status-label">Starting…</span>
       </div>
-      <div class="progress-row" id="progress-row">
+      <div class="progress-row">
         <div class="progress-bar">
           <div class="progress-fill" id="progress-fill"></div>
         </div>
         <span class="progress-text" id="progress-text">0 / 0</span>
       </div>
       <div class="step-desc" id="step-desc"></div>
+
+      <!-- Dry-run checklist (hidden during real run) -->
+      <ul class="dry-checklist" id="dry-checklist"></ul>
+
       <button class="btn-cancel" id="btn-cancel">Cancel</button>
     </div>
 
@@ -50,6 +66,12 @@ click "Create"'
         <span class="done-icon">✓</span>
         Recording saved. Open the Editor to polish and export.
       </div>
+    </div>
+
+    <!-- Error panel -->
+    <div id="panel-error" class="panel" hidden>
+      <div class="error-msg" id="error-msg"></div>
+      <button class="btn-back" id="btn-back">← Back</button>
     </div>
 
     <hr class="divider" />

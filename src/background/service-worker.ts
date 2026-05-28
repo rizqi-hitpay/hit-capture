@@ -372,6 +372,19 @@ async function handleAutomationError(message: string): Promise<void> {
   await stopRecording();
 }
 
+async function runDryRunMode(commands: ParsedCommand[]): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id == null) return;
+  await ensureContentScript(tab.id);
+  await chrome.storage.session.set({ dryRunState: 'running', dryRunStep: 0, dryRunTotal: commands.length });
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'RUN_DRY_RUN', commands } as ContentMessage);
+  } catch (err) {
+    console.error('[SW] Dry run failed:', err);
+    await chrome.storage.session.set({ dryRunState: 'error' });
+  }
+}
+
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
 chrome.commands.onCommand.addListener(async (command) => {
@@ -379,7 +392,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  const msg = message as { type: string; step?: number; total?: number; description?: string; message?: string; commands?: ParsedCommand[] };
+  const msg = message as { type: string; step?: number; total?: number; description?: string; message?: string; commands?: ParsedCommand[]; found?: boolean };
 
   // ── Content script → SW (unsolicited, sender.tab is set) ──────────────────
   if (sender.tab) {
@@ -399,6 +412,19 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       handleAutomationError(msg.message ?? 'Unknown automation error');
       return;
     }
+    if (msg.type === 'DRY_RUN_STEP') {
+      chrome.storage.session.set({
+        dryRunStep: msg.step ?? 0,
+        dryRunTotal: msg.total ?? 0,
+        dryRunDescription: msg.description ?? '',
+        dryRunFound: msg.found ?? false,
+      });
+      return;
+    }
+    if (msg.type === 'DRY_RUN_DONE') {
+      chrome.storage.session.set({ dryRunState: 'done' });
+      return;
+    }
     return;
   }
 
@@ -413,6 +439,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   }
   if (msg.type === 'RUN_COMMANDS') {
     runCommandMode(msg.commands ?? []).then(() => sendResponse({ type: 'OK' }));
+    return true;
+  }
+  if (msg.type === 'RUN_DRY_RUN') {
+    runDryRunMode(msg.commands ?? []).then(() => sendResponse({ type: 'OK' }));
     return true;
   }
   if (msg.type === 'CANCEL_AUTOMATION') {
