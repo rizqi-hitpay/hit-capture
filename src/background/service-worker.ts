@@ -6,34 +6,12 @@
  *
  * Video is recorded in an Offscreen Document (extension page context) so that
  * getUserMedia with chromeMediaSource:'tab' is not blocked by Permissions Policy.
- * Cursor events are captured by the content script as before.
  */
-import type {
-  RecordingState,
-  AutomationState,
-  ContentMessage,
-  ContentResponse,
-  SwMessage,
-  ParsedCommand,
-} from '../types';
-import { convertNaturalLanguage } from './claude';
+import type { RecordingState } from '../types';
 
-const KEY_STATE        = 'recordingState';
-const KEY_TAB          = 'recordingTabId';
-const KEY_HAS_VIDEO    = 'recordingHasVideo';
-const KEY_AUTO_STATE   = 'automationState';
-const KEY_AUTO_STEP    = 'automationStep';
-const KEY_AUTO_TOTAL   = 'automationTotal';
-const KEY_AUTO_DESC    = 'automationDesc';
-const KEY_DRY_TAB      = 'dryRunTabId';
-const KEY_API          = 'claudeApiKey';
-
-// In-memory screenshot cache (lost if SW restarts, acceptable for a live dry run)
-interface ScreenshotCache {
-  dataUrl: string;
-  rect: { x: number; y: number; w: number; h: number; dpr: number };
-}
-let screenshotCache: ScreenshotCache | null = null;
+const KEY_STATE     = 'recordingState';
+const KEY_TAB       = 'recordingTabId';
+const KEY_HAS_VIDEO = 'recordingHasVideo';
 
 // ─── State helpers ────────────────────────────────────────────────────────────
 
@@ -55,20 +33,6 @@ async function getTabId(): Promise<number | null> {
 async function setTabId(id: number | null): Promise<void> {
   if (id === null) await chrome.storage.session.remove(KEY_TAB);
   else             await chrome.storage.session.set({ [KEY_TAB]: id });
-}
-
-async function setAutomationState(
-  state: AutomationState,
-  step = 0,
-  total = 0,
-  description = '',
-): Promise<void> {
-  await chrome.storage.session.set({
-    [KEY_AUTO_STATE]: state,
-    [KEY_AUTO_STEP]: step,
-    [KEY_AUTO_TOTAL]: total,
-    [KEY_AUTO_DESC]: description,
-  });
 }
 
 async function getHasVideo(): Promise<boolean> {
@@ -111,29 +75,6 @@ function timestamp(): string {
   );
 }
 
-// ─── Content script injection ─────────────────────────────────────────────────
-
-async function ensureContentScript(tabId: number): Promise<void> {
-  try {
-    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    return;
-  } catch { /* not loaded yet */ }
-
-  const manifest = chrome.runtime.getManifest();
-  const csFiles: string[] = (manifest as chrome.runtime.Manifest & {
-    content_scripts?: Array<{ js?: string[] }>;
-  }).content_scripts?.[0]?.js ?? [];
-
-  if (csFiles.length === 0) return;
-
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: csFiles });
-    await sleep(350);
-  } catch (err) {
-    console.warn('[SW] Could not inject content script (restricted page?):', err);
-  }
-}
-
 // ─── Offscreen document ───────────────────────────────────────────────────────
 
 const OFFSCREEN_URL = chrome.runtime.getURL('src/offscreen/offscreen.html');
@@ -146,7 +87,6 @@ async function ensureOffscreenDocument(): Promise<void> {
       justification: 'Tab video capture via MediaRecorder',
     });
   } catch (err) {
-    // Chrome throws if a document already exists — that's fine, ignore it
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('single offscreen document')) throw err;
   }
@@ -156,10 +96,6 @@ async function closeOffscreenDocument(): Promise<void> {
   try { await chrome.offscreen.closeDocument(); } catch { /* already gone */ }
 }
 
-/**
- * Send a message to the offscreen document and wait for its response.
- * Returns the response object, or null if the doc isn't reachable.
- */
 async function sendToOffscreen(msg: object): Promise<unknown> {
   try {
     return await chrome.runtime.sendMessage(msg);
@@ -192,49 +128,25 @@ async function startRecording(tabId: number): Promise<void> {
   await setTabId(tabId);
   await setHasVideo(false);
 
-  await ensureContentScript(tabId);
-
-  // Get stream ID — pass to offscreen doc (not content script)
   const streamId = await getTabCaptureStreamId(tabId);
-  console.log('[SW] tabCapture streamId:', streamId);
+  if (!streamId) {
+    console.warn('[SW] No stream ID — cannot record this tab');
+    await setState('idle');
+    await setTabId(null);
+    return;
+  }
 
-  // If we have a stream ID, spin up the offscreen document and start video
-  if (streamId) {
-    await ensureOffscreenDocument();
-    const resp = await sendToOffscreen({ type: 'START_VIDEO', streamId });
-    console.log('[SW] START_VIDEO response:', resp);
-    if (resp && (resp as { ok?: boolean }).ok) {
-      await setHasVideo(true);
-    }
+  await ensureOffscreenDocument();
+  const resp = await sendToOffscreen({ type: 'START_VIDEO', streamId });
+  if (resp && (resp as { ok?: boolean }).ok) {
+    await setHasVideo(true);
+    await setState('recording');
   } else {
-    console.warn('[SW] No stream ID — video recording disabled for this tab');
-  }
-
-  // Start cursor capture in the content script (cursor-only, no video)
-  const startedAt = new Date().toISOString();
-  const msg: ContentMessage = { type: 'START_RECORDING', startedAt };
-
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      await chrome.tabs.sendMessage(tabId, msg);
-      await setState('recording');
-      return;
-    } catch (err) {
-      lastErr = err;
-      await sleep(200);
-    }
-  }
-
-  // Cursor start failed — clean up video too
-  if (await getHasVideo()) {
-    await sendToOffscreen({ type: 'STOP_VIDEO', filename: 'screen-recording-aborted.mp4' });
+    console.error('[SW] Offscreen START_VIDEO failed');
     await closeOffscreenDocument();
-    await setHasVideo(false);
+    await setState('idle');
+    await setTabId(null);
   }
-  console.error('[SW] Failed to start recording:', lastErr);
-  await setState('idle');
-  await setTabId(null);
 }
 
 async function stopRecording(): Promise<void> {
@@ -244,52 +156,22 @@ async function stopRecording(): Promise<void> {
   await setState('stopping');
   const stamp = timestamp();
 
-  // Stop cursor capture → get session JSON
-  try {
-    const response = (await chrome.tabs.sendMessage(tabId, { type: 'STOP_RECORDING' } as ContentMessage)) as ContentResponse;
-
-    if (response.type === 'SESSION_DATA') {
-      const json = JSON.stringify(response.session, null, 2);
-      const url = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
-      await chrome.downloads.download({ url, filename: `cursor-session-${stamp}.json`, saveAs: false });
-    }
-  } catch (err) {
-    console.error('[SW] Failed to stop cursor capture:', err);
-  }
-
-  // Stop video recording — wait for offscreen doc to finish the download
-  // before closing the document (closing it would abort the download).
   const hasVideo = await getHasVideo();
-  console.log('[SW] hasVideo:', hasVideo);
-
   if (hasVideo) {
-    // Pass a placeholder filename — we'll override with the correct extension
-    // once we know what MIME type the offscreen doc actually recorded.
     const resp = await sendToOffscreen({ type: 'STOP_VIDEO', filename: `screen-recording-${stamp}` }) as
       | { ok: boolean; dataUrl?: string; filename?: string; error?: string }
       | null;
-    console.log('[SW] STOP_VIDEO response ok:', resp?.ok, 'dataUrl length:', resp?.dataUrl?.length);
 
-    // The offscreen doc returns the video as a data URL (chrome.downloads is
-    // not available there), so we trigger the download from the SW instead.
     if (resp?.ok && resp.dataUrl) {
       try {
-        // Derive the correct file extension from the MIME type in the data URL
-        // so the saved file matches its actual container format.
-        // e.g. "data:video/webm;codecs=vp9;base64,..." → ".webm"
-        //      "data:video/mp4;base64,..."              → ".mp4"
         const mimeMatch = resp.dataUrl.match(/^data:([^;,]+)/);
         const mime = mimeMatch?.[1] ?? 'video/webm';
         const ext = mime.includes('mp4') || mime.includes('quicktime') ? 'mp4' : 'webm';
-        const videoFilename = `screen-recording-${stamp}.${ext}`;
-        console.log('[SW] Saving video as:', videoFilename, '(mime:', mime, ')');
-
         await chrome.downloads.download({
           url: resp.dataUrl,
-          filename: videoFilename,
+          filename: `screen-recording-${stamp}.${ext}`,
           saveAs: false,
         });
-        console.log('[SW] Video download triggered:', videoFilename);
       } catch (err) {
         console.error('[SW] Video download failed:', err);
       }
@@ -298,10 +180,8 @@ async function stopRecording(): Promise<void> {
     }
   }
 
-  // Now it is safe to close the offscreen document
   await closeOffscreenDocument();
   await setHasVideo(false);
-
   await setState('idle');
   await setTabId(null);
 }
@@ -316,145 +196,15 @@ async function toggleRecording(): Promise<void> {
   }
 }
 
-// ─── Command mode ─────────────────────────────────────────────────────────────
-
-async function runCommandMode(commands: ParsedCommand[]): Promise<void> {
-  const state = await getState();
-  if (state !== 'idle') return;
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id == null) return;
-  const tabId = tab.id;
-
-  await setState('starting');
-  await setTabId(tabId);
-  await setHasVideo(false);
-  await setAutomationState('idle');
-
-  await ensureContentScript(tabId);
-
-  const streamId = await getTabCaptureStreamId(tabId);
-  if (streamId) {
-    await ensureOffscreenDocument();
-    const resp = await sendToOffscreen({ type: 'START_VIDEO', streamId });
-    if (resp && (resp as { ok?: boolean }).ok) await setHasVideo(true);
-  }
-
-  const startedAt = new Date().toISOString();
-  try {
-    await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING', startedAt } as ContentMessage);
-  } catch {
-    // clean up on failure
-    if (await getHasVideo()) {
-      await sendToOffscreen({ type: 'STOP_VIDEO', filename: 'aborted' });
-      await closeOffscreenDocument();
-      await setHasVideo(false);
-    }
-    await setState('idle');
-    await setTabId(null);
-    return;
-  }
-
-  await setState('recording');
-  await setAutomationState('running', 0, commands.length, 'Starting…');
-
-  // Brief delay so the offscreen recorder captures a couple of frames
-  // before we start dispatching pointer events.
-  await sleep(400);
-
-  try {
-    await chrome.tabs.sendMessage(tabId, { type: 'RUN_AUTOMATION', commands } as ContentMessage);
-  } catch (err) {
-    console.error('[SW] Failed to start automation:', err);
-    await stopRecording();
-    await setAutomationState('error');
-  }
-}
-
-async function handleAutomationDone(): Promise<void> {
-  await setAutomationState('done');
-  await stopRecording();
-}
-
-async function handleAutomationError(message: string): Promise<void> {
-  console.error('[SW] Automation error:', message);
-  await setAutomationState('error', 0, 0, message);
-  await stopRecording();
-}
-
-async function runDryRunMode(commands: ParsedCommand[]): Promise<void> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id == null) return;
-  await ensureContentScript(tab.id);
-  screenshotCache = null;
-  await chrome.storage.session.set({
-    dryRunState: 'running',
-    dryRunStep: 0,
-    dryRunTotal: commands.length,
-    [KEY_DRY_TAB]: tab.id,
-  });
-  try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'RUN_DRY_RUN', commands } as ContentMessage);
-  } catch (err) {
-    console.error('[SW] Dry run failed:', err);
-    await chrome.storage.session.set({ dryRunState: 'error' });
-  }
-}
-
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'toggle-capture') await toggleRecording();
 });
 
-chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  const msg = message as { type: string; step?: number; total?: number; description?: string; message?: string; commands?: ParsedCommand[]; found?: boolean };
+chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  const msg = message as { type: string };
 
-  // ── Content script → SW (unsolicited, sender.tab is set) ──────────────────
-  if (sender.tab) {
-    if (msg.type === 'AUTOMATION_PROGRESS') {
-      chrome.storage.session.set({
-        [KEY_AUTO_STEP]: msg.step ?? 0,
-        [KEY_AUTO_TOTAL]: msg.total ?? 0,
-        [KEY_AUTO_DESC]: msg.description ?? '',
-      });
-      return;
-    }
-    if (msg.type === 'AUTOMATION_DONE') {
-      handleAutomationDone();
-      return;
-    }
-    if (msg.type === 'AUTOMATION_ERROR') {
-      handleAutomationError(msg.message ?? 'Unknown automation error');
-      return;
-    }
-    if (msg.type === 'DRY_RUN_STEP') {
-      const rect = (msg as { rect?: ScreenshotCache['rect'] | null }).rect ?? null;
-      chrome.storage.session.set({
-        dryRunStep: msg.step ?? 0,
-        dryRunTotal: msg.total ?? 0,
-        dryRunDescription: msg.description ?? '',
-        dryRunFound: msg.found ?? false,
-      });
-      // Phase 3: capture screenshot when element was found
-      if (msg.found && rect && sender.tab?.windowId != null) {
-        chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'jpeg', quality: 55 })
-          .then((dataUrl) => {
-            screenshotCache = { dataUrl, rect: rect! };
-            chrome.storage.session.set({ dryRunScreenshotReady: Date.now() });
-          })
-          .catch(() => { /* screenshot is optional */ });
-      }
-      return;
-    }
-    if (msg.type === 'DRY_RUN_DONE') {
-      chrome.storage.session.set({ dryRunState: 'done' });
-      return;
-    }
-    return;
-  }
-
-  // ── Popup → SW ─────────────────────────────────────────────────────────────
   if (msg.type === 'TOGGLE_RECORDING') {
     toggleRecording().then(() => sendResponse({ type: 'OK' }));
     return true;
@@ -463,42 +213,12 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     getState().then((recordingState) => sendResponse({ type: 'STATE', recordingState }));
     return true;
   }
-  if (msg.type === 'RUN_COMMANDS') {
-    runCommandMode(msg.commands ?? []).then(() => sendResponse({ type: 'OK' }));
-    return true;
-  }
-  if (msg.type === 'RUN_DRY_RUN') {
-    runDryRunMode(msg.commands ?? []).then(() => sendResponse({ type: 'OK' }));
-    return true;
-  }
-  if (msg.type === 'CANCEL_AUTOMATION') {
-    stopRecording().then(() => {
-      setAutomationState('idle');
-      sendResponse({ type: 'OK' });
-    });
-    return true;
-  }
-  if (msg.type === 'NL_TO_COMMANDS') {
-    const text = (msg as { text?: string }).text ?? '';
-    chrome.storage.local.get(KEY_API).then(async (result) => {
-      const apiKey = result[KEY_API] as string | undefined;
-      if (!apiKey) { sendResponse({ type: 'ERROR', message: 'No API key set. Open settings (⚙️) to add your Claude API key.' }); return; }
-      try {
-        const commands = await convertNaturalLanguage(text, apiKey);
-        sendResponse({ type: 'OK', commands });
-      } catch (err) {
-        sendResponse({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    return true;
-  }
-  if (msg.type === 'GET_DRY_RUN_SCREENSHOT') {
-    sendResponse(screenshotCache ?? null);
-    return true;
-  }
 });
 
 // Restore badge on SW restart
 getState().then(updateBadge);
-// Clear stale automation state
-chrome.storage.session.remove([KEY_AUTO_STATE, KEY_AUTO_STEP, KEY_AUTO_TOTAL, KEY_AUTO_DESC]);
+
+// Ensure stale recording state is cleared on install/update
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.session.remove([KEY_STATE, KEY_TAB, KEY_HAS_VIDEO]);
+});

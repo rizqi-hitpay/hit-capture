@@ -86,14 +86,14 @@ src/
 - [x] Remove all pointer/scroll event listeners and `rawEvents` array
 - [x] Keep the file but leave it as a no-op stub (manifest still references it; remove entirely later)
 
-### 1.2 Simplify service worker
-- [ ] Open `src/background/service-worker.ts`
-- [ ] Remove: command mode handlers (`RUN_COMMANDS`, `RUN_DRY_RUN`, `CANCEL_AUTOMATION`, `NL_TO_COMMANDS`, `GET_DRY_RUN_SCREENSHOT`)
-- [ ] Remove: automation state keys, `screenshotCache`, `runCommandMode`, `runDryRunMode`, `setAutomationState`
-- [ ] Remove: import of `convertNaturalLanguage` / `claude.ts`
-- [ ] Keep: `TOGGLE_RECORDING`, `GET_STATE`, recording state machine, badge update, offscreen document lifecycle
-- [ ] Keep: `STOP_RECORDING` → `SESSION_DATA` handler (we'll download WebM but skip the JSON session download)
-- [ ] Update stop flow: download WebM only (no JSON session file)
+### 1.2 Simplify service worker ✓
+- [x] Open `src/background/service-worker.ts`
+- [x] Remove: command mode handlers (`RUN_COMMANDS`, `RUN_DRY_RUN`, `CANCEL_AUTOMATION`, `NL_TO_COMMANDS`, `GET_DRY_RUN_SCREENSHOT`)
+- [x] Remove: automation state keys, `screenshotCache`, `runCommandMode`, `runDryRunMode`, `setAutomationState`
+- [x] Remove: import of `convertNaturalLanguage` / `claude.ts`
+- [x] Keep: `TOGGLE_RECORDING`, `GET_STATE`, recording state machine, badge update, offscreen document lifecycle
+- [x] Keep: `STOP_RECORDING` → `SESSION_DATA` handler (we'll download WebM but skip the JSON session download)
+- [x] Update stop flow: download WebM only (no JSON session file)
 
 ### 1.3 Rebuild popup
 - [ ] Replace `src/popup/popup.html` with minimal layout:
