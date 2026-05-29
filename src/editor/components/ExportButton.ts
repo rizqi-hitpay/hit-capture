@@ -33,8 +33,7 @@ export class ExportButton {
     const cancelBtn = this.el.querySelector('#btn-cancel') as HTMLButtonElement;
 
     btn.addEventListener('click', () => {
-      const { phase, polishedTrack } = store.get();
-      if (phase === 'ready' && polishedTrack) startExport();
+      if (store.get().phase === 'ready') startExport();
     });
 
     cancelBtn.addEventListener('click', () => cancelExport());

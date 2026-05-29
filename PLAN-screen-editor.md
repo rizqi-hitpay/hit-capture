@@ -164,14 +164,16 @@ src/
 ### 2.6 Update EncodeWorkerIn type ✓
 - [x] `EncodeWorkerIn` updated: `cropRect: CropRect | null` and `zoomLevel: number` replace `track`, `session`, `coordTransform`
 
-### 2.7 Simplify editor entry + upload zone
-- [ ] `src/editor/editor.ts`: remove pipeline worker launch, remove `polishedTrack` handling
-- [ ] `src/editor/components/UploadZone.ts`: accept video only (no JSON session file required)
-- [ ] Phase transitions: `empty → uploading → ready → exporting → ready`
+### 2.7 Simplify editor entry + upload zone ✓
+- [x] `editor.ts`: removed `BeforeAfterToggle`, processing overlay, stale imports
+- [x] `editor.html`: removed processing overlay div and before-after footer
+- [x] `ExportButton`: removed `polishedTrack` guard so Export fires whenever `phase === 'ready'`
+- [x] `UploadZone`: video-only (done in Phase 1.4)
+- [x] Phase flow: `empty → uploading → ready → exporting → ready`
 
 ### 2.8 Verify build + manual test
-- [ ] `npm run typecheck` — zero errors
-- [ ] `npm run build`
+- [x] `npm run typecheck` — zero errors
+- [x] `npm run build` — 22 modules, clean
 - [ ] Load video in editor → change gradient → draw crop region → adjust zoom → export → verify MP4 plays with correct crop/zoom/background
 
 ---
