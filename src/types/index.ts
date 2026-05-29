@@ -199,6 +199,7 @@ export interface EditorState {
   error: string | null;
   cropRect: CropRect | null;
   zoomLevel: number;
+  cropMode: boolean;
 }
 
 // ─── Worker messages ──────────────────────────────────────────────────────────

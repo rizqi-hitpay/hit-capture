@@ -139,12 +139,12 @@ src/
 - [x] `zoomLevel` scales floating window around center (`winW = baseW * zoomLevel`, centered)
 - [x] Cursor draw calls removed (no cursor data in Phase 2)
 
-### 2.3 Rebuild ControlPanel
-- [ ] Replace `src/editor/components/ControlPanel.ts` with three sections:
-  - **Background**: gradient preset swatches + padding slider + corner radius slider
-  - **Crop**: "Draw crop region" toggle button (activates overlay mode on canvas)
-  - **Zoom**: single `<input type="range" min="0.5" max="3" step="0.05">` → `zoomLevel`
-- [ ] Wire all controls to `editorStore`
+### 2.3 Rebuild ControlPanel ✓
+- [x] **Background** section: gradient preset swatches + padding slider + corner radius slider
+- [x] **Crop** section: "Draw crop region" toggle (sets `cropMode`); active crop shows x/y/w/h% + Clear button
+- [x] **Zoom** section: range slider 0.5×–3× step 0.05 → `zoomLevel`
+- [x] Added `cropMode: boolean` to `EditorState` + `setCropMode` store action
+- [x] All controls wired to `editorStore`; `update()` keeps sliders in sync with store
 
 ### 2.4 Crop overlay in PreviewCanvas
 - [ ] Open `src/editor/components/PreviewCanvas.ts`

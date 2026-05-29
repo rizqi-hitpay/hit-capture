@@ -57,6 +57,7 @@ const INITIAL: EditorState = {
   error: null,
   cropRect: DEFAULT_CROP_RECT,
   zoomLevel: DEFAULT_ZOOM_LEVEL,
+  cropMode: false,
 };
 
 export const store = new Atom<EditorState>(INITIAL);
@@ -129,11 +130,15 @@ export function setShowRawCursor(show: boolean): void {
 }
 
 export function setCropRect(rect: CropRect | null): void {
-  store.set((prev) => ({ ...prev, cropRect: rect }));
+  store.set((prev) => ({ ...prev, cropRect: rect, cropMode: false }));
 }
 
 export function setZoomLevel(level: number): void {
   store.set((prev) => ({ ...prev, zoomLevel: level }));
+}
+
+export function setCropMode(active: boolean): void {
+  store.set((prev) => ({ ...prev, cropMode: active }));
 }
 
 export async function startExport(): Promise<void> {
