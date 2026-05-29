@@ -95,19 +95,19 @@ src/
 - [x] Keep: `STOP_RECORDING` → `SESSION_DATA` handler (we'll download WebM but skip the JSON session download)
 - [x] Update stop flow: download WebM only (no JSON session file)
 
-### 1.3 Rebuild popup
-- [ ] Replace `src/popup/popup.html` with minimal layout:
+### 1.3 Rebuild popup ✓
+- [x] Replace `src/popup/popup.html` with minimal layout:
   - Header: logo + title + settings gear
   - Single large **Start Recording** / **Stop Recording** button
   - Status row: red dot + live timer (counts up while recording)
   - "Open Editor →" footer button
-- [ ] Replace `src/popup/popup.ts`:
+- [x] Replace `src/popup/popup.ts`:
   - On load: `GET_STATE` → set button text/state
   - Button click: `TOGGLE_RECORDING`
   - Live timer: `setInterval` updating a `<span>` every second while `recordingState === 'recording'`
   - Listen to `chrome.storage.session` changes for `KEY_STATE` to sync UI
   - "Open Editor" → `chrome.tabs.create` to editor page
-- [ ] Replace `src/popup/popup.css` with clean minimal styles (no command-mode panels)
+- [x] Replace `src/popup/popup.css` with clean minimal styles (no command-mode panels)
 
 ### 1.4 Remove unused code
 - [ ] Delete `src/commands/` directory
