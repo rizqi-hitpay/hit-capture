@@ -146,12 +146,14 @@ src/
 - [x] Added `cropMode: boolean` to `EditorState` + `setCropMode` store action
 - [x] All controls wired to `editorStore`; `update()` keeps sliders in sync with store
 
-### 2.4 Crop overlay in PreviewCanvas
-- [ ] Open `src/editor/components/PreviewCanvas.ts`
-- [ ] Add `cropMode: boolean` state
-- [ ] When `cropMode` is true: overlay a semi-transparent dark layer on the canvas; let user drag to define a rectangle; on mouse-up commit `CropRect` (normalized 0–1) to `editorStore`
-- [ ] Draw dashed orange border showing current `cropRect` during normal preview
-- [ ] "Clear crop" button sets `cropRect: null`
+### 2.4 Crop overlay in PreviewCanvas ✓
+- [x] Remove all cursor/polishedTrack/ZoomController code; loop starts when `phase === 'ready'`
+- [x] Pass `cropRect` and `zoomLevel` from store to `renderer.render()` every frame
+- [x] `cropMode` true → canvas cursor `crosshair`; mousedown/move/up drag to draw selection rect
+- [x] Drag overlay: dark vignette + clear selection window + orange border + rule-of-thirds guides
+- [x] On mouseup: normalise drag to `CropRect` (0–1 fractions of window) → `setCropRect()`; cancels `cropMode`
+- [x] When `cropRect` set (no drag): dashed orange border drawn over the live preview
+- [x] mouseleave cancels an in-progress drag without committing
 
 ### 2.5 Update encode worker
 - [ ] Open `src/workers/encode.worker.ts`
