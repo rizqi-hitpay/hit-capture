@@ -72,10 +72,8 @@ export class PreviewCanvas {
     }
 
     if (state.phase === 'ready') {
-      const baseW = state.sceneConfig.outputWidth;
-      const baseH = state.sceneConfig.outputHeight;
-      const W = Math.round((state.cropRect ? state.cropRect.w * baseW : baseW) * PREVIEW_SCALE);
-      const H = Math.round((state.cropRect ? state.cropRect.h * baseH : baseH) * PREVIEW_SCALE);
+      const W = Math.round(state.sceneConfig.outputWidth  * PREVIEW_SCALE);
+      const H = Math.round(state.sceneConfig.outputHeight * PREVIEW_SCALE);
       if (this.canvas.width !== W || this.canvas.height !== H) {
         this.canvas.width  = W;
         this.canvas.height = H;
@@ -159,13 +157,17 @@ export class PreviewCanvas {
     return { x: (previewW - winW) / 2, y: (previewH - winH) / 2, w: winW, h: winH };
   }
 
-  private drawCropGuide(previewW: number, previewH: number, _crop: CropRect): void {
-    // The canvas is already resized to the crop, so just frame the whole canvas.
+  private drawCropGuide(previewW: number, previewH: number, crop: CropRect): void {
+    const x = crop.x * previewW;
+    const y = crop.y * previewH;
+    const w = crop.w * previewW;
+    const h = crop.h * previewH;
+
     this.ctx.save();
     this.ctx.strokeStyle = '#f6ad55';
     this.ctx.lineWidth = 1.5;
     this.ctx.setLineDash([6, 3]);
-    this.ctx.strokeRect(0.75, 0.75, previewW - 1.5, previewH - 1.5);
+    this.ctx.strokeRect(x, y, w, h);
     this.ctx.setLineDash([]);
     this.ctx.restore();
   }

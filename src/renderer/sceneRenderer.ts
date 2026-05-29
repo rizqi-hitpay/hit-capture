@@ -63,15 +63,22 @@ export class SceneRenderer {
   ): void {
     const { paddingPx, cornerRadiusPx, shadowBlur, shadowAlpha } = config.window;
 
-    // Window always fills the canvas with padding + zoomLevel.
-    // When cropRect is set the canvas is pre-resized to the crop dimensions,
-    // so the window naturally covers the cropped region.
-    const baseW = W - paddingPx * 2;
-    const baseH = H - paddingPx * 2;
-    const winW = baseW * zoomLevel;
-    const winH = baseH * zoomLevel;
-    const winX = (W - winW) / 2;
-    const winY = (H - winH) / 2;
+    // cropRect positions the floating window as fractions of the output canvas.
+    // When absent, the window fills the padded area scaled by zoomLevel.
+    let winX: number, winY: number, winW: number, winH: number;
+    if (cropRect) {
+      winX = cropRect.x * W;
+      winY = cropRect.y * H;
+      winW = cropRect.w * W;
+      winH = cropRect.h * H;
+    } else {
+      const baseW = W - paddingPx * 2;
+      const baseH = H - paddingPx * 2;
+      winW = baseW * zoomLevel;
+      winH = baseH * zoomLevel;
+      winX = (W - winW) / 2;
+      winY = (H - winH) / 2;
+    }
 
     ctx.save();
 
