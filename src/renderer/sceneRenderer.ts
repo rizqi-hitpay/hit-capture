@@ -63,22 +63,15 @@ export class SceneRenderer {
   ): void {
     const { paddingPx, cornerRadiusPx, shadowBlur, shadowAlpha } = config.window;
 
-    // cropRect defines the window as output-canvas fractions.
-    // When absent, use padding + zoomLevel (legacy behaviour).
-    let winX: number, winY: number, winW: number, winH: number;
-    if (cropRect) {
-      winX = cropRect.x * W;
-      winY = cropRect.y * H;
-      winW = cropRect.w * W;
-      winH = cropRect.h * H;
-    } else {
-      const baseW = W - paddingPx * 2;
-      const baseH = H - paddingPx * 2;
-      winW = baseW * zoomLevel;
-      winH = baseH * zoomLevel;
-      winX = (W - winW) / 2;
-      winY = (H - winH) / 2;
-    }
+    // Window always fills the canvas with padding + zoomLevel.
+    // When cropRect is set the canvas is pre-resized to the crop dimensions,
+    // so the window naturally covers the cropped region.
+    const baseW = W - paddingPx * 2;
+    const baseH = H - paddingPx * 2;
+    const winW = baseW * zoomLevel;
+    const winH = baseH * zoomLevel;
+    const winX = (W - winW) / 2;
+    const winY = (H - winH) / 2;
 
     ctx.save();
 
@@ -125,13 +118,25 @@ export class SceneRenderer {
           natH = winH;
         }
 
-        // Cover-crop: scale so the shorter axis fills the window.
-        // videoOffset pans within the leftover source space (0=left/top, 1=right/bottom).
-        const scale = Math.max(winW / natW, winH / natH);
-        const srcW  = winW / scale;
-        const srcH  = winH / scale;
-        const sx    = (natW - srcW) * videoOffset.x;
-        const sy    = (natH - srcH) * videoOffset.y;
+        // When cropRect is active the canvas is already resized to the crop region;
+        // read from that sub-region of the source so the video shows the cropped area.
+        // videoOffset pans within the leftover space inside the crop region.
+        let sx: number, sy: number, srcW: number, srcH: number;
+        if (cropRect) {
+          const cropSrcW = cropRect.w * natW;
+          const cropSrcH = cropRect.h * natH;
+          const scale    = Math.max(winW / cropSrcW, winH / cropSrcH);
+          srcW = winW / scale;
+          srcH = winH / scale;
+          sx   = cropRect.x * natW + (cropSrcW - srcW) * videoOffset.x;
+          sy   = cropRect.y * natH + (cropSrcH - srcH) * videoOffset.y;
+        } else {
+          const scale = Math.max(winW / natW, winH / natH);
+          srcW = winW / scale;
+          srcH = winH / scale;
+          sx   = (natW - srcW) * videoOffset.x;
+          sy   = (natH - srcH) * videoOffset.y;
+        }
 
         ctx.drawImage(
           src as CanvasImageSource,

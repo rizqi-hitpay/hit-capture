@@ -68,23 +68,28 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   if (msg.type === 'INIT_WEBM_ENCODE') {
     const { sceneConfig, cropRect, zoomLevel, videoOffset, estimatedFrames } = msg;
     const { outputWidth: W, outputHeight: H } = sceneConfig;
+    const effW = cropRect ? Math.round(cropRect.w * W) : W;
+    const effH = cropRect ? Math.round(cropRect.h * H) : H;
+    const encodeConfig = effW !== W || effH !== H
+      ? { ...sceneConfig, outputWidth: effW, outputHeight: effH }
+      : sceneConfig;
     try {
-      const canvas = new OffscreenCanvas(W, H);
+      const canvas = new OffscreenCanvas(effW, effH);
       const ctx = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
       const renderer = new SceneRenderer();
 
       let muxerSetup: MuxerSetup | null = null;
       const encoderSetup = await setupEncoder({
-        width: W, height: H,
+        width: effW, height: effH,
         framerate: DEFAULT_OUTPUT_FRAMERATE,
         bitrate: DEFAULT_OUTPUT_BITRATE,
         onChunk: (chunk, meta) => muxerSetup?.muxer.addVideoChunk(chunk, meta),
         onError: (err) => console.error('[EncodeWorker] WebM encoder error:', err),
       });
-      muxerSetup = createMuxer(encoderSetup.codec, W, H);
+      muxerSetup = createMuxer(encoderSetup.codec, effW, effH);
 
       webmState = {
-        sceneConfig, cropRect, zoomLevel, videoOffset,
+        sceneConfig: encodeConfig, cropRect, zoomLevel, videoOffset,
         canvas, ctx, renderer,
         muxerSetup, encoderSetup,
         frameCount: 0, estimatedFrames,
@@ -154,10 +159,15 @@ async function encode(
   videoOffset: VideoOffset,
 ): Promise<void> {
   const { outputWidth: W, outputHeight: H } = sceneConfig;
+  const effW = cropRect ? Math.round(cropRect.w * W) : W;
+  const effH = cropRect ? Math.round(cropRect.h * H) : H;
+  const encodeConfig = effW !== W || effH !== H
+    ? { ...sceneConfig, outputWidth: effW, outputHeight: effH }
+    : sceneConfig;
 
   const fileBuffer = await videoFile.arrayBuffer();
 
-  const canvas = new OffscreenCanvas(W, H);
+  const canvas = new OffscreenCanvas(effW, effH);
   const ctx = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
   const renderer = new SceneRenderer();
 
@@ -183,7 +193,7 @@ async function encode(
     const timestampMs = timestampUs / 1000;
 
     try {
-      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, cropRect, zoomLevel, videoOffset);
+      renderer.render(ctx, makeFrame(videoFrame, timestampMs), encodeConfig, cropRect, zoomLevel, videoOffset);
 
       const outputFrame = new VideoFrame(canvas, {
         timestamp: timestampUs,
@@ -219,14 +229,14 @@ async function encode(
   }
 
   encoderSetup = await setupEncoder({
-    width: W, height: H,
+    width: effW, height: effH,
     framerate: DEFAULT_OUTPUT_FRAMERATE,
     bitrate: DEFAULT_OUTPUT_BITRATE,
     onChunk: (chunk, meta) => { muxerSetup?.muxer.addVideoChunk(chunk, meta); },
     onError: (err) => { console.error('[EncodeWorker] VideoEncoder error:', err); },
   });
 
-  muxerSetup = createMuxer(encoderSetup.codec, W, H);
+  muxerSetup = createMuxer(encoderSetup.codec, effW, effH);
 
   const decoder = new VideoDecoder({
     output: (frame) => { decodeQueueSize--; pendingFrames.push(frame); processNextFrame(); },
