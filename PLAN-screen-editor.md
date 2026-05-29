@@ -132,12 +132,12 @@ src/
 - [x] Add `DEFAULT_CROP_RECT = null` and `DEFAULT_ZOOM_LEVEL = 1.0` to `defaults.ts`
 - [x] Wire into `editorStore` initial state; export `setCropRect` and `setZoomLevel` actions
 
-### 2.2 Update SceneRenderer for crop + zoom
-- [ ] Open `src/renderer/sceneRenderer.ts`
-- [ ] Accept `cropRect: CropRect | null` and `zoomLevel: number` in `drawFrame()`
-- [ ] When `cropRect` is set, use it as the `sx, sy, sw, sh` source region in `drawImage`
-- [ ] Apply `zoomLevel` by scaling the floating window rect before drawing
-- [ ] Remove cursor draw calls (or make them conditional on a flag)
+### 2.2 Update SceneRenderer for crop + zoom ✓
+- [x] `render()` accepts `cropRect: CropRect | null` and `zoomLevel: number` (both optional, default null/1.0)
+- [x] When `cropRect` set: use x/y/w/h × natW/natH as source rect, stretched to fill window
+- [x] When no crop: existing cover-crop algorithm unchanged
+- [x] `zoomLevel` scales floating window around center (`winW = baseW * zoomLevel`, centered)
+- [x] Cursor draw calls removed (no cursor data in Phase 2)
 
 ### 2.3 Rebuild ControlPanel
 - [ ] Replace `src/editor/components/ControlPanel.ts` with three sections:
