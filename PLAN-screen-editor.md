@@ -117,9 +117,9 @@ src/
 - [x] Remove pipeline worker entry from `vite.config.ts` and any rollupOptions input
 - [x] Remove pipeline worker reference from `editorStore.ts` (also removed `setSession`, simplified `UploadZone` to video-only)
 
-### 1.5 Verify build + manual test
-- [ ] `npm run typecheck` — zero errors
-- [ ] `npm run build`
+### 1.5 Verify build + manual test ✓
+- [x] `npm run typecheck` — zero errors
+- [x] `npm run build` — 26 modules, no pipeline worker in output
 - [ ] Load `dist/` in Chrome → start recording → stop → verify WebM downloaded with no in-page badge
 
 ---
