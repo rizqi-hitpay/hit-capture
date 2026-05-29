@@ -109,12 +109,13 @@ src/
   - "Open Editor" → `chrome.tabs.create` to editor page
 - [x] Replace `src/popup/popup.css` with clean minimal styles (no command-mode panels)
 
-### 1.4 Remove unused code
-- [ ] Delete `src/commands/` directory
-- [ ] Delete `src/background/claude.ts`
-- [ ] Delete `src/pipeline/` directory
-- [ ] Delete `src/workers/pipeline.worker.ts`
-- [ ] Remove pipeline worker entry from `vite.config.ts` and any rollupOptions input
+### 1.4 Remove unused code ✓
+- [x] Delete `src/commands/` directory
+- [x] Delete `src/background/claude.ts`
+- [x] Delete `src/pipeline/` directory
+- [x] Delete `src/workers/pipeline.worker.ts`
+- [x] Remove pipeline worker entry from `vite.config.ts` and any rollupOptions input
+- [x] Remove pipeline worker reference from `editorStore.ts` (also removed `setSession`, simplified `UploadZone` to video-only)
 
 ### 1.5 Verify build + manual test
 - [ ] `npm run typecheck` — zero errors

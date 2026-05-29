@@ -6,12 +6,11 @@ import type {
   EditorState,
   PipelineParams,
   SceneConfig,
-  CaptureSession,
   PolishedTrack,
 } from '../../types';
 import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG } from './defaults';
-import { identityTransform, computeTransform } from '../../shared/coords';
-import { PIPELINE_DEBOUNCE_MS, DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
+import { identityTransform } from '../../shared/coords';
+import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
 
 // ─── Store atom ───────────────────────────────────────────────────────────────
 
@@ -61,16 +60,11 @@ export const store = new Atom<EditorState>(INITIAL);
 
 // ─── Worker instances (long-lived) ────────────────────────────────────────────
 
-let pipelineWorker: Worker | null = null;
 let encodeWorker: Worker | null = null;
 
 // ─── WebM export helpers ──────────────────────────────────────────────────────
 
-// Shared ACK resolver: main thread awaits this before sending the next
-// WEBM_FRAME (or after INIT_WEBM_ENCODE). Resolved by the worker's ACK message.
 let webmAckResolve: (() => void) | null = null;
-
-// Hidden video element used for seek-based WebM frame extraction.
 let webmExportVideo: HTMLVideoElement | null = null;
 
 function resolveWebmAck(): void {
@@ -82,46 +76,17 @@ function waitForWebmAck(): Promise<void> {
   return new Promise<void>((res) => { webmAckResolve = res; });
 }
 
-function getPipelineWorker(): Worker {
-  if (!pipelineWorker || pipelineWorker.onmessage === null) {
-    pipelineWorker?.terminate();
-    pipelineWorker = new Worker(
-      new URL('../../workers/pipeline.worker.ts', import.meta.url),
-      { type: 'module' }
-    );
-  }
-  return pipelineWorker;
-}
-
-// ─── Debounce ─────────────────────────────────────────────────────────────────
-
-let pipelineDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-// ─── Actions ─────────────────────────────────────────────────────────────────
+// ─── Actions ──────────────────────────────────────────────────────────────────
 
 export function setVideoFile(file: File): void {
   store.set((prev) => ({ ...prev, videoFile: file, phase: 'uploading', error: null }));
-  tryProcessFiles();
+  probeVideoDimensions(file);
 }
 
-export function setSession(session: CaptureSession): void {
-  store.set((prev) => ({ ...prev, session, error: null }));
-  tryProcessFiles();
-}
-
-function tryProcessFiles(): void {
-  const { videoFile, session } = store.get();
-  if (!videoFile || !session) return;
-
-  // Once both files are loaded, probe video dimensions and compute transform
+function probeVideoDimensions(file: File): void {
   const video = document.createElement('video');
-  video.src = URL.createObjectURL(videoFile);
+  video.src = URL.createObjectURL(file);
   video.onloadedmetadata = () => {
-    const { transform, autoAligned } = computeTransform(
-      session,
-      video.videoWidth,
-      video.videoHeight
-    );
     store.set((prev) => ({
       ...prev,
       sceneConfig: {
@@ -129,11 +94,8 @@ function tryProcessFiles(): void {
         outputWidth: video.videoWidth,
         outputHeight: video.videoHeight,
       },
-      coordTransform: transform,
-      autoAligned,
-      phase: 'processing',
+      phase: 'ready',
     }));
-    schedulePipeline();
     URL.revokeObjectURL(video.src);
   };
   video.onerror = () => {
@@ -150,7 +112,6 @@ export function updatePipelineParams(partial: Partial<PipelineParams>): void {
     ...prev,
     pipelineParams: { ...prev.pipelineParams, ...partial },
   }));
-  debouncePipeline();
 }
 
 export function updateSceneConfig(partial: Partial<SceneConfig>): void {
@@ -164,39 +125,9 @@ export function setShowRawCursor(show: boolean): void {
   store.set((prev) => ({ ...prev, showRawCursor: show }));
 }
 
-function debouncePipeline(): void {
-  if (pipelineDebounceTimer) clearTimeout(pipelineDebounceTimer);
-  pipelineDebounceTimer = setTimeout(schedulePipeline, PIPELINE_DEBOUNCE_MS);
-}
-
-function schedulePipeline(): void {
-  const { session, pipelineParams } = store.get();
-  if (!session) return;
-
-  store.set((prev) => ({ ...prev, phase: 'processing' }));
-
-  const worker = getPipelineWorker();
-  worker.onmessage = (e) => {
-    const { type } = e.data;
-    if (type === 'DONE') {
-      const track = e.data.track as PolishedTrack;
-      store.set((prev) => ({ ...prev, polishedTrack: track, phase: 'ready' }));
-    } else if (type === 'ERROR') {
-      store.set((prev) => ({ ...prev, error: e.data.message, phase: 'ready' }));
-    }
-  };
-
-  worker.postMessage({
-    type: 'RUN_PIPELINE',
-    events: session.events,
-    params: pipelineParams,
-    viewport: session.viewport,
-  });
-}
-
 export async function startExport(): Promise<void> {
   const state = store.get();
-  if (!state.videoFile || !state.polishedTrack || !state.session) return;
+  if (!state.videoFile) return;
 
   store.set((prev) => ({ ...prev, phase: 'exporting', exportProgress: 0 }));
 
@@ -227,9 +158,9 @@ export async function startExport(): Promise<void> {
 
 function startMp4Export(
   videoFile: File,
-  track: import('../../types').PolishedTrack,
+  track: PolishedTrack | null,
   sceneConfig: import('../../types').SceneConfig,
-  session: import('../../types').CaptureSession,
+  session: import('../../types').CaptureSession | null,
   coordTransform: import('../../types').CoordTransform,
 ): void {
   if (!encodeWorker) return;
@@ -257,9 +188,9 @@ function startMp4Export(
 
 async function startWebmExport(
   videoFile: File,
-  track: import('../../types').PolishedTrack,
+  track: PolishedTrack | null,
   sceneConfig: import('../../types').SceneConfig,
-  session: import('../../types').CaptureSession,
+  session: import('../../types').CaptureSession | null,
   coordTransform: import('../../types').CoordTransform,
 ): Promise<void> {
   if (!encodeWorker) return;
@@ -281,20 +212,19 @@ async function startWebmExport(
         URL.revokeObjectURL(url);
       }
     } else if (msg.type === 'ERROR') {
-      resolveWebmAck(); // unblock any pending wait
+      resolveWebmAck();
       store.set((prev) => ({ ...prev, phase: 'ready', error: msg.message }));
     }
   };
 
-  const estimatedFrames = Math.ceil((track.totalDurationMs / 1000) * DEFAULT_OUTPUT_FRAMERATE);
+  const totalMs = track?.totalDurationMs ?? (videoFile.size / 1000);
+  const estimatedFrames = Math.ceil((totalMs / 1000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  // Init the worker (async — we wait for WEBM_INIT_ACK before sending frames)
   worker.postMessage({ type: 'INIT_WEBM_ENCODE', track, sceneConfig, session, coordTransform, estimatedFrames });
   await waitForWebmAck();
 
-  if (encodeWorker === null) return; // Cancelled during init
+  if (encodeWorker === null) return;
 
-  // Set up a hidden video element for seek-based frame capture
   const video = document.createElement('video');
   webmExportVideo = video;
   video.src = URL.createObjectURL(videoFile);
@@ -309,10 +239,10 @@ async function startWebmExport(
   });
 
   const frameIntervalSec = 1 / DEFAULT_OUTPUT_FRAMERATE;
-  const totalDurationSec = track.totalDurationMs / 1000;
+  const totalDurationSec = totalMs / 1000;
 
   for (let i = 0; i < estimatedFrames; i++) {
-    if (encodeWorker === null) break; // Cancelled
+    if (encodeWorker === null) break;
 
     const targetSec = i * frameIntervalSec;
     if (targetSec >= totalDurationSec) break;
@@ -323,7 +253,7 @@ async function startWebmExport(
       video.addEventListener('seeked', onSeeked);
     });
 
-    if (encodeWorker === null) break; // Cancelled during seek
+    if (encodeWorker === null) break;
 
     const frame = new VideoFrame(video, {
       timestamp: Math.round(video.currentTime * 1_000_000),
@@ -333,7 +263,6 @@ async function startWebmExport(
     await waitForWebmAck();
   }
 
-  // Clean up video element
   URL.revokeObjectURL(video.src);
   video.src = '';
   video.remove();
@@ -345,10 +274,8 @@ async function startWebmExport(
 }
 
 export function cancelExport(): void {
-  // Unblock any pending WebM ACK wait so the async loop can exit
   resolveWebmAck();
 
-  // Clean up WebM export video element if present
   if (webmExportVideo) {
     URL.revokeObjectURL(webmExportVideo.src);
     webmExportVideo.src = '';
