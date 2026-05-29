@@ -20,6 +20,7 @@ import {
 
 export const DEFAULT_CROP_RECT = null;
 export const DEFAULT_ZOOM_LEVEL = 1.0;
+export const DEFAULT_VIDEO_OFFSET = { x: 0.5, y: 0.5 };
 
 export const DEFAULT_PIPELINE_PARAMS: PipelineParams = {
   smoothingStrength: 0.65,

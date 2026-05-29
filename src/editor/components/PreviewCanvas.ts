@@ -130,11 +130,12 @@ export class PreviewCanvas {
       previewConfig,
       cropRect,
       zoomLevel,
+      state.videoOffset,
     );
 
     // Overlay: current crop rect guide (dashed orange border)
     if (cropRect && !state.cropMode) {
-      this.drawCropGuide(previewW, previewH, cropRect, sceneConfig.window.paddingPx * PREVIEW_SCALE, zoomLevel);
+      this.drawCropGuide(previewW, previewH, cropRect);
     }
 
     // Overlay: active drag selection
@@ -147,29 +148,21 @@ export class PreviewCanvas {
 
   // ─── Crop overlay helpers ────────────────────────────────────────────────────
 
-  /** Returns the floating window rect in preview-canvas pixels. */
+  /** Returns the floating window rect in preview-canvas pixels (when no cropRect). */
   private windowRect(previewW: number, previewH: number, paddingPx: number, zoomLevel: number) {
     const baseW = previewW - paddingPx * 2;
     const baseH = previewH - paddingPx * 2;
     const winW = baseW * zoomLevel;
     const winH = baseH * zoomLevel;
-    return {
-      x: (previewW - winW) / 2,
-      y: (previewH - winH) / 2,
-      w: winW,
-      h: winH,
-    };
+    return { x: (previewW - winW) / 2, y: (previewH - winH) / 2, w: winW, h: winH };
   }
 
-  private drawCropGuide(
-    previewW: number, previewH: number,
-    crop: CropRect, paddingPx: number, zoomLevel: number,
-  ): void {
-    const win = this.windowRect(previewW, previewH, paddingPx, zoomLevel);
-    const x = win.x + crop.x * win.w;
-    const y = win.y + crop.y * win.h;
-    const w = crop.w * win.w;
-    const h = crop.h * win.h;
+  private drawCropGuide(previewW: number, previewH: number, crop: CropRect): void {
+    // cropRect is in output-canvas fractions — map directly to preview pixels
+    const x = crop.x * previewW;
+    const y = crop.y * previewH;
+    const w = crop.w * previewW;
+    const h = crop.h * previewH;
 
     this.ctx.save();
     this.ctx.strokeStyle = '#f6ad55';
@@ -231,28 +224,25 @@ export class PreviewCanvas {
       const state = store.get();
       if (!state.cropMode) { this.drag = null; return; }
 
-      const paddingPx = state.sceneConfig.window.paddingPx * PREVIEW_SCALE;
-      const win = this.windowRect(this.canvas.width, this.canvas.height, paddingPx, state.zoomLevel);
+      const cW = this.canvas.width;
+      const cH = this.canvas.height;
 
       const x0 = Math.min(this.drag.startX, this.drag.curX);
       const y0 = Math.min(this.drag.startY, this.drag.curY);
       const x1 = Math.max(this.drag.startX, this.drag.curX);
       const y1 = Math.max(this.drag.startY, this.drag.curY);
-
       const rectW = x1 - x0;
       const rectH = y1 - y0;
 
       // Only commit if the drawn rect is large enough to be intentional
       if (rectW > 8 && rectH > 8) {
+        // Save as fractions of the output canvas (clamped to [0,1])
         const crop: CropRect = {
-          x: Math.max(0, (x0 - win.x) / win.w),
-          y: Math.max(0, (y0 - win.y) / win.h),
-          w: Math.min(1, rectW / win.w),
-          h: Math.min(1, rectH / win.h),
+          x: Math.max(0, Math.min(1, x0 / cW)),
+          y: Math.max(0, Math.min(1, y0 / cH)),
+          w: Math.max(0, Math.min(1 - x0 / cW, rectW / cW)),
+          h: Math.max(0, Math.min(1 - y0 / cH, rectH / cH)),
         };
-        // Clamp so crop stays within [0,1]
-        crop.w = Math.min(crop.w, 1 - crop.x);
-        crop.h = Math.min(crop.h, 1 - crop.y);
         setCropRect(crop); // also sets cropMode = false
       } else {
         setCropMode(false);

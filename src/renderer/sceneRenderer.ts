@@ -3,7 +3,7 @@
  * Composites: gradient background → floating window (video).
  * Works with both CanvasRenderingContext2D and OffscreenCanvasRenderingContext2D.
  */
-import type { SceneConfig, RenderFrameData, CropRect } from '../types';
+import type { SceneConfig, RenderFrameData, CropRect, VideoOffset } from '../types';
 import { GRADIENT_PRESETS, createGradient } from './gradientPresets';
 
 type AnyCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -16,10 +16,12 @@ export class SceneRenderer {
    * Render a single frame onto ctx.
    * The canvas must already be sized to sceneConfig.outputWidth × outputHeight.
    *
-   * @param cropRect  User-defined crop region (0–1 fractions of video natural size).
-   *                  When null the full video is cover-cropped to fill the window.
-   * @param zoomLevel Scale factor for the floating window (1.0 = fill padded area).
-   *                  Values > 1 make the window larger; < 1 make it smaller.
+   * @param cropRect    When set, defines the floating window position and size as
+   *                    fractions of the output canvas (x, y, w, h in [0, 1]).
+   *                    When null, the window fills the padded area scaled by zoomLevel.
+   * @param zoomLevel   Scale factor applied when no cropRect is set (1.0 = fill padded area).
+   * @param videoOffset Controls which part of the video is visible inside the window.
+   *                    { x: 0.5, y: 0.5 } = centred (default).
    */
   render(
     ctx: AnyCtx,
@@ -27,10 +29,11 @@ export class SceneRenderer {
     config: SceneConfig,
     cropRect: CropRect | null = null,
     zoomLevel = 1.0,
+    videoOffset: VideoOffset = { x: 0.5, y: 0.5 },
   ): void {
     const { outputWidth: W, outputHeight: H } = config;
     this.drawBackground(ctx, config, W, H);
-    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel);
+    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel, videoOffset);
   }
 
   private drawBackground(ctx: AnyCtx, config: SceneConfig, W: number, H: number): void {
@@ -56,16 +59,26 @@ export class SceneRenderer {
     H: number,
     cropRect: CropRect | null,
     zoomLevel: number,
+    videoOffset: VideoOffset,
   ): void {
     const { paddingPx, cornerRadiusPx, shadowBlur, shadowAlpha } = config.window;
 
-    // Base window fills the padded area; zoomLevel scales it around center.
-    const baseW = W - paddingPx * 2;
-    const baseH = H - paddingPx * 2;
-    const winW = baseW * zoomLevel;
-    const winH = baseH * zoomLevel;
-    const winX = (W - winW) / 2;
-    const winY = (H - winH) / 2;
+    // cropRect defines the window as output-canvas fractions.
+    // When absent, use padding + zoomLevel (legacy behaviour).
+    let winX: number, winY: number, winW: number, winH: number;
+    if (cropRect) {
+      winX = cropRect.x * W;
+      winY = cropRect.y * H;
+      winW = cropRect.w * W;
+      winH = cropRect.h * H;
+    } else {
+      const baseW = W - paddingPx * 2;
+      const baseH = H - paddingPx * 2;
+      winW = baseW * zoomLevel;
+      winH = baseH * zoomLevel;
+      winX = (W - winW) / 2;
+      winY = (H - winH) / 2;
+    }
 
     ctx.save();
 
@@ -112,29 +125,18 @@ export class SceneRenderer {
           natH = winH;
         }
 
-        let sx: number, sy: number, srcW: number, srcH: number;
-
-        if (cropRect) {
-          // User-defined crop region: draw exactly what they selected, stretched
-          // to fill the floating window (preserves their framing intent).
-          sx   = cropRect.x * natW;
-          sy   = cropRect.y * natH;
-          srcW = cropRect.w * natW;
-          srcH = cropRect.h * natH;
-        } else {
-          // Default: cover-crop — scale so the shorter axis fills the window,
-          // center-crop the longer axis. Eliminates black bars entirely.
-          const scale = Math.max(winW / natW, winH / natH);
-          srcW = winW / scale;
-          srcH = winH / scale;
-          sx   = (natW - srcW) / 2;
-          sy   = (natH - srcH) / 2;
-        }
+        // Cover-crop: scale so the shorter axis fills the window.
+        // videoOffset pans within the leftover source space (0=left/top, 1=right/bottom).
+        const scale = Math.max(winW / natW, winH / natH);
+        const srcW  = winW / scale;
+        const srcH  = winH / scale;
+        const sx    = (natW - srcW) * videoOffset.x;
+        const sy    = (natH - srcH) * videoOffset.y;
 
         ctx.drawImage(
           src as CanvasImageSource,
-          sx, sy, srcW, srcH,  // source rect
-          winX, winY, winW, winH, // destination rect
+          sx, sy, srcW, srcH,
+          winX, winY, winW, winH,
         );
       }
     }

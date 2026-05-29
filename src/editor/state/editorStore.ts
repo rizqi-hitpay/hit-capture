@@ -7,8 +7,9 @@ import type {
   PipelineParams,
   SceneConfig,
   CropRect,
+  VideoOffset,
 } from '../../types';
-import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CROP_RECT, DEFAULT_ZOOM_LEVEL } from './defaults';
+import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CROP_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_OFFSET } from './defaults';
 import { identityTransform } from '../../shared/coords';
 import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
 
@@ -57,6 +58,7 @@ const INITIAL: EditorState = {
   cropRect: DEFAULT_CROP_RECT,
   zoomLevel: DEFAULT_ZOOM_LEVEL,
   cropMode: false,
+  videoOffset: DEFAULT_VIDEO_OFFSET,
 };
 
 export const store = new Atom<EditorState>(INITIAL);
@@ -140,6 +142,10 @@ export function setCropMode(active: boolean): void {
   store.set((prev) => ({ ...prev, cropMode: active }));
 }
 
+export function setVideoOffset(offset: VideoOffset): void {
+  store.set((prev) => ({ ...prev, videoOffset: offset }));
+}
+
 export async function startExport(): Promise<void> {
   const state = store.get();
   if (!state.videoFile) return;
@@ -172,7 +178,7 @@ export async function startExport(): Promise<void> {
 }
 
 function startMp4Export(videoFile: File): void {
-  const { sceneConfig, cropRect, zoomLevel } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoOffset } = store.get();
   if (!encodeWorker) return;
 
   encodeWorker.onmessage = async (e) => {
@@ -193,11 +199,11 @@ function startMp4Export(videoFile: File): void {
     }
   };
 
-  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel });
+  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoOffset });
 }
 
 async function startWebmExport(videoFile: File): Promise<void> {
-  const { sceneConfig, cropRect, zoomLevel } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoOffset } = store.get();
   if (!encodeWorker) return;
   const worker = encodeWorker;
 
@@ -226,7 +232,7 @@ async function startWebmExport(videoFile: File): Promise<void> {
   // The loop breaks early once targetSec >= actual duration anyway.
   const estimatedFrames = Math.ceil((videoFile.size / 50_000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, estimatedFrames });
+  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoOffset, estimatedFrames });
   await waitForWebmAck();
 
   if (encodeWorker === null) return;

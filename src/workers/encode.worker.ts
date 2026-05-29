@@ -10,6 +10,7 @@ import type {
   EncodeWorkerOut,
   SceneConfig,
   CropRect,
+  VideoOffset,
 } from '../types';
 import type { MuxerSetup } from '../encoder/mp4Muxer';
 import type { EncoderSetupResult } from '../encoder/webcodecs';
@@ -25,6 +26,7 @@ interface WebmEncodeState {
   sceneConfig: SceneConfig;
   cropRect: CropRect | null;
   zoomLevel: number;
+  videoOffset: VideoOffset;
   canvas: OffscreenCanvas;
   ctx: OffscreenCanvasRenderingContext2D;
   renderer: SceneRenderer;
@@ -54,9 +56,9 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   const msg = e.data;
 
   if (msg.type === 'START_ENCODE') {
-    const { videoFile, sceneConfig, cropRect, zoomLevel } = msg;
+    const { videoFile, sceneConfig, cropRect, zoomLevel, videoOffset } = msg;
     try {
-      await encode(videoFile, sceneConfig, cropRect, zoomLevel);
+      await encode(videoFile, sceneConfig, cropRect, zoomLevel, videoOffset);
     } catch (err) {
       self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     }
@@ -64,7 +66,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   }
 
   if (msg.type === 'INIT_WEBM_ENCODE') {
-    const { sceneConfig, cropRect, zoomLevel, estimatedFrames } = msg;
+    const { sceneConfig, cropRect, zoomLevel, videoOffset, estimatedFrames } = msg;
     const { outputWidth: W, outputHeight: H } = sceneConfig;
     try {
       const canvas = new OffscreenCanvas(W, H);
@@ -82,7 +84,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
       muxerSetup = createMuxer(encoderSetup.codec, W, H);
 
       webmState = {
-        sceneConfig, cropRect, zoomLevel,
+        sceneConfig, cropRect, zoomLevel, videoOffset,
         canvas, ctx, renderer,
         muxerSetup, encoderSetup,
         frameCount: 0, estimatedFrames,
@@ -98,11 +100,11 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   if (msg.type === 'WEBM_FRAME') {
     if (!webmState) return;
     const { frame } = msg;
-    const { sceneConfig, cropRect, zoomLevel, canvas, ctx, renderer, encoderSetup } = webmState;
+    const { sceneConfig, cropRect, zoomLevel, videoOffset, canvas, ctx, renderer, encoderSetup } = webmState;
     const timestampUs = frame.timestamp;
     const timestampMs = timestampUs / 1000;
 
-    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, cropRect, zoomLevel);
+    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, cropRect, zoomLevel, videoOffset);
 
     const outputFrame = new VideoFrame(canvas, {
       timestamp: timestampUs,
@@ -149,6 +151,7 @@ async function encode(
   sceneConfig: SceneConfig,
   cropRect: CropRect | null,
   zoomLevel: number,
+  videoOffset: VideoOffset,
 ): Promise<void> {
   const { outputWidth: W, outputHeight: H } = sceneConfig;
 
@@ -180,7 +183,7 @@ async function encode(
     const timestampMs = timestampUs / 1000;
 
     try {
-      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, cropRect, zoomLevel);
+      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, cropRect, zoomLevel, videoOffset);
 
       const outputFrame = new VideoFrame(canvas, {
         timestamp: timestampUs,

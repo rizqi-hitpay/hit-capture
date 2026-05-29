@@ -4,6 +4,7 @@ import {
   setCropRect,
   setZoomLevel,
   setCropMode,
+  setVideoOffset,
 } from '../state/editorStore';
 import type { EditorState, GradientPresetId } from '../../types';
 import { GRADIENT_IDS, GRADIENT_PRESETS } from '../../renderer/gradientPresets';
@@ -69,6 +70,21 @@ export class ControlPanel {
           <input type="range" id="zoom-level" class="slider" min="0.5" max="3" step="0.05" value="1" />
         </section>
 
+        <!-- Video position -->
+        <section class="panel-section">
+          <h3 class="panel-heading">Video position</h3>
+          <div class="control-row">
+            <label class="control-label">H-offset</label>
+            <span class="control-value" id="voffset-x-val">50%</span>
+          </div>
+          <input type="range" id="voffset-x" class="slider" min="0" max="1" step="0.01" value="0.5" />
+          <div class="control-row" style="margin-top:8px">
+            <label class="control-label">V-offset</label>
+            <span class="control-value" id="voffset-y-val">50%</span>
+          </div>
+          <input type="range" id="voffset-y" class="slider" min="0" max="1" step="0.01" value="0.5" />
+        </section>
+
       </div>
     `;
 
@@ -127,6 +143,21 @@ export class ControlPanel {
       (this.el.querySelector('#zoom-val') as HTMLElement).textContent = `${val.toFixed(2)}×`;
       setZoomLevel(val);
     });
+
+    // Video offset
+    const voffsetX = this.el.querySelector('#voffset-x') as HTMLInputElement;
+    voffsetX.addEventListener('input', () => {
+      const val = parseFloat(voffsetX.value);
+      (this.el.querySelector('#voffset-x-val') as HTMLElement).textContent = `${Math.round(val * 100)}%`;
+      setVideoOffset({ ...store.get().videoOffset, x: val });
+    });
+
+    const voffsetY = this.el.querySelector('#voffset-y') as HTMLInputElement;
+    voffsetY.addEventListener('input', () => {
+      const val = parseFloat(voffsetY.value);
+      (this.el.querySelector('#voffset-y-val') as HTMLElement).textContent = `${Math.round(val * 100)}%`;
+      setVideoOffset({ ...store.get().videoOffset, y: val });
+    });
   }
 
   private update(state: EditorState): void {
@@ -179,6 +210,20 @@ export class ControlPanel {
       zoomSlider.value = String(state.zoomLevel);
       (this.el.querySelector('#zoom-val') as HTMLElement).textContent =
         `${state.zoomLevel.toFixed(2)}×`;
+    }
+
+    // Sync video offset sliders
+    const voffsetX = this.el.querySelector('#voffset-x') as HTMLInputElement | null;
+    if (voffsetX) {
+      voffsetX.value = String(state.videoOffset.x);
+      (this.el.querySelector('#voffset-x-val') as HTMLElement).textContent =
+        `${Math.round(state.videoOffset.x * 100)}%`;
+    }
+    const voffsetY = this.el.querySelector('#voffset-y') as HTMLInputElement | null;
+    if (voffsetY) {
+      voffsetY.value = String(state.videoOffset.y);
+      (this.el.querySelector('#voffset-y-val') as HTMLElement).textContent =
+        `${Math.round(state.videoOffset.y * 100)}%`;
     }
   }
 }

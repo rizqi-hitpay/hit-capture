@@ -165,15 +165,28 @@ export interface CoordTransform {
 
 // ─── Crop / zoom ──────────────────────────────────────────────────────────────
 
+/**
+ * Defines the floating window container as fractions of the output canvas.
+ * The video fills this rect with cover-crop semantics; VideoOffset controls panning.
+ */
 export interface CropRect {
-  /** 0–1 relative to video natural width */
+  /** 0–1 fraction of output canvas width  (left edge) */
   x: number;
-  /** 0–1 relative to video natural height */
+  /** 0–1 fraction of output canvas height (top edge) */
   y: number;
-  /** 0–1 fraction of video natural width */
+  /** 0–1 fraction of output canvas width  (container width) */
   w: number;
-  /** 0–1 fraction of video natural height */
+  /** 0–1 fraction of output canvas height (container height) */
   h: number;
+}
+
+/**
+ * Controls which part of the video is visible inside the floating window.
+ * 0 = show left/top edge · 0.5 = centred (default) · 1 = show right/bottom edge
+ */
+export interface VideoOffset {
+  x: number;
+  y: number;
 }
 
 // ─── Editor state ─────────────────────────────────────────────────────────────
@@ -200,6 +213,7 @@ export interface EditorState {
   cropRect: CropRect | null;
   zoomLevel: number;
   cropMode: boolean;
+  videoOffset: VideoOffset;
 }
 
 // ─── Worker messages ──────────────────────────────────────────────────────────
@@ -216,8 +230,8 @@ export type PipelineWorkerOut =
   | { type: 'ERROR'; message: string };
 
 export type EncodeWorkerIn =
-  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number }
-  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; estimatedFrames: number }
+  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoOffset: VideoOffset }
+  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoOffset: VideoOffset; estimatedFrames: number }
   | { type: 'WEBM_FRAME'; frame: VideoFrame }
   | { type: 'END_WEBM_ENCODE' };
 
