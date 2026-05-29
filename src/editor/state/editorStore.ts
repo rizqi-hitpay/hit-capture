@@ -6,7 +6,6 @@ import type {
   EditorState,
   PipelineParams,
   SceneConfig,
-  PolishedTrack,
   CropRect,
 } from '../../types';
 import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CROP_RECT, DEFAULT_ZOOM_LEVEL } from './defaults';
@@ -159,7 +158,7 @@ export async function startExport(): Promise<void> {
 
   if (isWebM) {
     try {
-      await startWebmExport(state.videoFile, state.polishedTrack, state.sceneConfig, state.session, state.coordTransform);
+      await startWebmExport(state.videoFile);
     } catch (err) {
       store.set((prev) => ({
         ...prev,
@@ -168,17 +167,12 @@ export async function startExport(): Promise<void> {
       }));
     }
   } else {
-    startMp4Export(state.videoFile, state.polishedTrack, state.sceneConfig, state.session, state.coordTransform);
+    startMp4Export(state.videoFile);
   }
 }
 
-function startMp4Export(
-  videoFile: File,
-  track: PolishedTrack | null,
-  sceneConfig: import('../../types').SceneConfig,
-  session: import('../../types').CaptureSession | null,
-  coordTransform: import('../../types').CoordTransform,
-): void {
+function startMp4Export(videoFile: File): void {
+  const { sceneConfig, cropRect, zoomLevel } = store.get();
   if (!encodeWorker) return;
 
   encodeWorker.onmessage = async (e) => {
@@ -199,16 +193,11 @@ function startMp4Export(
     }
   };
 
-  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, track, sceneConfig, session, coordTransform });
+  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel });
 }
 
-async function startWebmExport(
-  videoFile: File,
-  track: PolishedTrack | null,
-  sceneConfig: import('../../types').SceneConfig,
-  session: import('../../types').CaptureSession | null,
-  coordTransform: import('../../types').CoordTransform,
-): Promise<void> {
+async function startWebmExport(videoFile: File): Promise<void> {
+  const { sceneConfig, cropRect, zoomLevel } = store.get();
   if (!encodeWorker) return;
   const worker = encodeWorker;
 
@@ -233,10 +222,11 @@ async function startWebmExport(
     }
   };
 
-  const totalMs = track?.totalDurationMs ?? (videoFile.size / 1000);
-  const estimatedFrames = Math.ceil((totalMs / 1000) * DEFAULT_OUTPUT_FRAMERATE);
+  // Duration is known only after loadedmetadata; use a generous estimate for now.
+  // The loop breaks early once targetSec >= actual duration anyway.
+  const estimatedFrames = Math.ceil((videoFile.size / 50_000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  worker.postMessage({ type: 'INIT_WEBM_ENCODE', track, sceneConfig, session, coordTransform, estimatedFrames });
+  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, estimatedFrames });
   await waitForWebmAck();
 
   if (encodeWorker === null) return;
@@ -255,7 +245,7 @@ async function startWebmExport(
   });
 
   const frameIntervalSec = 1 / DEFAULT_OUTPUT_FRAMERATE;
-  const totalDurationSec = totalMs / 1000;
+  const totalDurationSec = isFinite(video.duration) ? video.duration : Infinity;
 
   for (let i = 0; i < estimatedFrames; i++) {
     if (encodeWorker === null) break;

@@ -8,34 +8,26 @@
 import type {
   EncodeWorkerIn,
   EncodeWorkerOut,
-  PolishedPoint,
-  PolishedTrack,
   SceneConfig,
-  CaptureSession,
-  CoordTransform,
-  RenderFrameData,
+  CropRect,
 } from '../types';
 import type { MuxerSetup } from '../encoder/mp4Muxer';
 import type { EncoderSetupResult } from '../encoder/webcodecs';
 import { demuxMP4 } from '../encoder/frameSource';
 import { setupEncoder } from '../encoder/webcodecs';
 import { createMuxer } from '../encoder/mp4Muxer';
-import { ZoomController } from '../renderer/zoomController';
 import { SceneRenderer } from '../renderer/sceneRenderer';
 import { DEFAULT_OUTPUT_FRAMERATE, DEFAULT_OUTPUT_BITRATE, ENCODE_MAX_QUEUE_DEPTH } from '../shared/constants';
-import { transformPoint } from '../shared/coords';
 
-// ─── WebM streaming encode state (set by INIT_WEBM_ENCODE, cleared by END_WEBM_ENCODE)
+// ─── WebM streaming encode state ─────────────────────────────────────────────
 
 interface WebmEncodeState {
-  track: PolishedTrack;
   sceneConfig: SceneConfig;
-  session: CaptureSession;
-  coordTransform: CoordTransform;
+  cropRect: CropRect | null;
+  zoomLevel: number;
   canvas: OffscreenCanvas;
   ctx: OffscreenCanvasRenderingContext2D;
   renderer: SceneRenderer;
-  zoom: ZoomController;
   muxerSetup: MuxerSetup;
   encoderSetup: EncoderSetupResult;
   frameCount: number;
@@ -44,31 +36,40 @@ interface WebmEncodeState {
 
 let webmState: WebmEncodeState | null = null;
 
+// ─── Null render frame ────────────────────────────────────────────────────────
+
+function makeFrame(source: VideoFrame | OffscreenCanvas, timestampMs: number) {
+  return {
+    videoSource: source as unknown as import('../types').RenderFrameData['videoSource'],
+    cursorX: 0, cursorY: 0,
+    isClick: false, clickProgress: 0,
+    camera: { scale: 1, tx: 0, ty: 0 },
+    t: timestampMs,
+  };
+}
+
 // ─── Message dispatch ─────────────────────────────────────────────────────────
 
 self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   const msg = e.data;
 
   if (msg.type === 'START_ENCODE') {
-    const { videoFile, track, sceneConfig, session, coordTransform } = msg;
+    const { videoFile, sceneConfig, cropRect, zoomLevel } = msg;
     try {
-      await encode(videoFile, track, sceneConfig, session, coordTransform);
+      await encode(videoFile, sceneConfig, cropRect, zoomLevel);
     } catch (err) {
-      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
-      self.postMessage(out);
+      self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     }
     return;
   }
 
   if (msg.type === 'INIT_WEBM_ENCODE') {
-    const { track, sceneConfig, session, coordTransform, estimatedFrames } = msg;
+    const { sceneConfig, cropRect, zoomLevel, estimatedFrames } = msg;
     const { outputWidth: W, outputHeight: H } = sceneConfig;
     try {
       const canvas = new OffscreenCanvas(W, H);
       const ctx = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
       const renderer = new SceneRenderer();
-      const zoom = new ZoomController(sceneConfig.autoZoom);
-      zoom.build(track, session.viewport.w, session.viewport.h);
 
       let muxerSetup: MuxerSetup | null = null;
       const encoderSetup = await setupEncoder({
@@ -80,12 +81,16 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
       });
       muxerSetup = createMuxer(encoderSetup.codec, W, H);
 
-      webmState = { track, sceneConfig, session, coordTransform, canvas, ctx, renderer, zoom, muxerSetup, encoderSetup, frameCount: 0, estimatedFrames };
+      webmState = {
+        sceneConfig, cropRect, zoomLevel,
+        canvas, ctx, renderer,
+        muxerSetup, encoderSetup,
+        frameCount: 0, estimatedFrames,
+      };
 
       self.postMessage({ type: 'WEBM_INIT_ACK' } as EncodeWorkerOut);
     } catch (err) {
-      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
-      self.postMessage(out);
+      self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     }
     return;
   }
@@ -93,18 +98,11 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   if (msg.type === 'WEBM_FRAME') {
     if (!webmState) return;
     const { frame } = msg;
-    const { track, sceneConfig, session, coordTransform, canvas, ctx, renderer, zoom, encoderSetup } = webmState;
+    const { sceneConfig, cropRect, zoomLevel, canvas, ctx, renderer, encoderSetup } = webmState;
     const timestampUs = frame.timestamp;
     const timestampMs = timestampUs / 1000;
 
-    const { x: rawX, y: rawY } = getCursorAtTime(track.points, timestampMs);
-    const { x: vidX, y: vidY } = transformPoint(rawX, rawY, coordTransform);
-    const cursorX = (vidX / session.viewport.w) * sceneConfig.outputWidth;
-    const cursorY = (vidY / session.viewport.h) * sceneConfig.outputHeight;
-    const isClick = track.clicks.some((c) => Math.abs(c.t - timestampMs) < 50);
-    const camera = zoom.getCamera(timestampMs);
-
-    renderer.render(ctx, { videoSource: frame, cursorX, cursorY, isClick, clickProgress: 0, camera, t: timestampMs }, sceneConfig);
+    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, cropRect, zoomLevel);
 
     const outputFrame = new VideoFrame(canvas, {
       timestamp: timestampUs,
@@ -134,11 +132,9 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
       await encoderSetup.encoder.flush();
       muxerSetup.muxer.finalize();
       const { buffer } = muxerSetup.target;
-      const doneMsg: EncodeWorkerOut = { type: 'DONE', buffer };
-      (self as unknown as Worker).postMessage(doneMsg, [buffer]);
+      (self as unknown as Worker).postMessage({ type: 'DONE', buffer } as EncodeWorkerOut, [buffer]);
     } catch (err) {
-      const out: EncodeWorkerOut = { type: 'ERROR', message: err instanceof Error ? err.message : String(err) };
-      self.postMessage(out);
+      self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     } finally {
       webmState = null;
     }
@@ -146,34 +142,25 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   }
 };
 
-// ─── Main encode function ─────────────────────────────────────────────────────
+// ─── MP4/MOV encode ───────────────────────────────────────────────────────────
 
 async function encode(
   videoFile: File,
-  track: PolishedTrack,
   sceneConfig: SceneConfig,
-  session: CaptureSession,
-  coordTransform: CoordTransform
+  cropRect: CropRect | null,
+  zoomLevel: number,
 ): Promise<void> {
   const { outputWidth: W, outputHeight: H } = sceneConfig;
 
-  // Read the full file into memory (needed for mp4box)
   const fileBuffer = await videoFile.arrayBuffer();
 
-  // Set up the OffscreenCanvas
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
-
-  // Scene renderer + zoom controller
   const renderer = new SceneRenderer();
-  const zoom = new ZoomController(sceneConfig.autoZoom);
-  zoom.build(track, session.viewport.w, session.viewport.h);
 
-  // Muxer setup (codec determined after encoder setup)
   let muxerSetup: ReturnType<typeof createMuxer> | null = null;
   let encoderSetup: Awaited<ReturnType<typeof setupEncoder>> | null = null;
 
-  // Decode queue for backpressure
   let decodeQueueSize = 0;
   let totalSamples = 0;
   let samplesDecoded = 0;
@@ -181,7 +168,6 @@ async function encode(
   let resolveEncode: (() => void) | null = null;
   const encodePromise = new Promise<void>((res) => { resolveEncode = res; });
 
-  // Pending decoded frames (we process them in order)
   const pendingFrames: VideoFrame[] = [];
   let processingFrame = false;
 
@@ -194,48 +180,15 @@ async function encode(
     const timestampMs = timestampUs / 1000;
 
     try {
-      // Get cursor position at this timestamp
-      const { x: rawCursorX, y: rawCursorY } = getCursorAtTime(track.points, timestampMs);
-      const { x: vidCursorX, y: vidCursorY } = transformPoint(rawCursorX, rawCursorY, coordTransform);
+      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, cropRect, zoomLevel);
 
-      // Scale cursor to output canvas space
-      const cursorX = (vidCursorX / session.viewport.w) * W;
-      const cursorY = (vidCursorY / session.viewport.h) * H;
-
-      // Is this a click frame?
-      const isClick = track.clicks.some((c) => Math.abs(c.t - timestampMs) < 50);
-      const clickProgress = isClick
-        ? (timestampMs - (track.clicks.find((c) => Math.abs(c.t - timestampMs) < 50)?.t ?? 0)) / 400
-        : 0;
-
-      // Camera state
-      const camera = zoom.getCamera(timestampMs);
-
-      const frameData: RenderFrameData = {
-        videoSource: videoFrame,
-        cursorX,
-        cursorY,
-        isClick,
-        clickProgress,
-        camera,
-        t: timestampMs,
-      };
-
-      renderer.render(ctx, frameData, sceneConfig);
-
-      // Create output VideoFrame from canvas
       const outputFrame = new VideoFrame(canvas, {
         timestamp: timestampUs,
         duration: videoFrame.duration ?? undefined,
       });
-
       videoFrame.close();
 
-      // Encode with backpressure
-      while (
-        encoderSetup &&
-        encoderSetup.encoder.encodeQueueSize > ENCODE_MAX_QUEUE_DEPTH
-      ) {
+      while (encoderSetup && encoderSetup.encoder.encodeQueueSize > ENCODE_MAX_QUEUE_DEPTH) {
         await sleep(5);
       }
 
@@ -246,9 +199,7 @@ async function encode(
       outputFrame.close();
 
       samplesDecoded++;
-      const progress = Math.round((samplesDecoded / Math.max(totalSamples, 1)) * 100);
-      const out: EncodeWorkerOut = { type: 'PROGRESS', percent: progress };
-      self.postMessage(out);
+      self.postMessage({ type: 'PROGRESS', percent: Math.round((samplesDecoded / Math.max(totalSamples, 1)) * 100) } as EncodeWorkerOut);
     } catch (err) {
       videoFrame.close();
       console.error('[EncodeWorker] Frame error:', err);
@@ -264,45 +215,25 @@ async function encode(
     }
   }
 
-  // Set up encoder (needs width/height upfront)
   encoderSetup = await setupEncoder({
-    width: W,
-    height: H,
+    width: W, height: H,
     framerate: DEFAULT_OUTPUT_FRAMERATE,
     bitrate: DEFAULT_OUTPUT_BITRATE,
-    onChunk: (chunk, meta) => {
-      muxerSetup?.muxer.addVideoChunk(chunk, meta);
-    },
-    onError: (err) => {
-      console.error('[EncodeWorker] VideoEncoder error:', err);
-    },
+    onChunk: (chunk, meta) => { muxerSetup?.muxer.addVideoChunk(chunk, meta); },
+    onError: (err) => { console.error('[EncodeWorker] VideoEncoder error:', err); },
   });
 
   muxerSetup = createMuxer(encoderSetup.codec, W, H);
 
-  // Set up VideoDecoder
   const decoder = new VideoDecoder({
-    output: (frame) => {
-      decodeQueueSize--;
-      pendingFrames.push(frame);
-      processNextFrame();
-    },
-    error: (err) => {
-      console.error('[EncodeWorker] VideoDecoder error:', err);
-    },
+    output: (frame) => { decodeQueueSize--; pendingFrames.push(frame); processNextFrame(); },
+    error: (err) => { console.error('[EncodeWorker] VideoDecoder error:', err); },
   });
 
-  // Demux and decode
   const { track: videoTrack, description } = await demuxMP4(fileBuffer, {
     onChunk: async (chunk, _idx, total) => {
       totalSamples = total;
-
-      // Backpressure — pause if decode queue is full
-      while (decodeQueueSize > ENCODE_MAX_QUEUE_DEPTH * 2) {
-        await sleep(10);
-      }
-
-      // Configure decoder on first chunk (once we have description)
+      while (decodeQueueSize > ENCODE_MAX_QUEUE_DEPTH * 2) { await sleep(10); }
       if (decoder.state === 'unconfigured') {
         decoder.configure({
           codec: videoTrack.codec,
@@ -311,57 +242,22 @@ async function encode(
           description,
         });
       }
-
       decodeQueueSize++;
       decoder.decode(chunk);
     },
-    onDone: () => {
-      // Decoder will flush remaining frames via output callback
-    },
-    onError: (err) => {
-      throw err;
-    },
+    onDone: () => {},
+    onError: (err) => { throw err; },
   });
 
-  // Wait for all frames to be encoded
   await encodePromise;
-
-  // Flush encoder and finalize muxer
   await encoderSetup.encoder.flush();
   muxerSetup.muxer.finalize();
 
   const { buffer } = muxerSetup.target;
-  const doneMsg: EncodeWorkerOut = { type: 'DONE', buffer };
-  (self as unknown as Worker).postMessage(doneMsg, [buffer]);
+  (self as unknown as Worker).postMessage({ type: 'DONE', buffer } as EncodeWorkerOut, [buffer]);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getCursorAtTime(points: PolishedPoint[], timeMs: number): { x: number; y: number } {
-  if (points.length === 0) return { x: 0, y: 0 };
-  if (timeMs <= points[0].t) return { x: points[0].x, y: points[0].y };
-  if (timeMs >= points[points.length - 1].t) {
-    const last = points[points.length - 1];
-    return { x: last.x, y: last.y };
-  }
-
-  let lo = 0;
-  let hi = points.length - 1;
-  while (lo < hi - 1) {
-    const mid = (lo + hi) >> 1;
-    if (points[mid].t <= timeMs) lo = mid;
-    else hi = mid;
-  }
-
-  const prev = points[lo];
-  const next = points[hi];
-  const span = next.t - prev.t;
-  const alpha = span > 0 ? (timeMs - prev.t) / span : 0;
-  return {
-    x: prev.x + (next.x - prev.x) * alpha,
-    y: prev.y + (next.y - prev.y) * alpha,
-  };
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));

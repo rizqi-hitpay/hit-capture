@@ -216,8 +216,8 @@ export type PipelineWorkerOut =
   | { type: 'ERROR'; message: string };
 
 export type EncodeWorkerIn =
-  | { type: 'START_ENCODE'; videoFile: File; track: PolishedTrack; sceneConfig: SceneConfig; session: CaptureSession; coordTransform: CoordTransform }
-  | { type: 'INIT_WEBM_ENCODE'; track: PolishedTrack; sceneConfig: SceneConfig; session: CaptureSession; coordTransform: CoordTransform; estimatedFrames: number }
+  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number }
+  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; estimatedFrames: number }
   | { type: 'WEBM_FRAME'; frame: VideoFrame }
   | { type: 'END_WEBM_ENCODE' };
 

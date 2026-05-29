@@ -155,16 +155,14 @@ src/
 - [x] When `cropRect` set (no drag): dashed orange border drawn over the live preview
 - [x] mouseleave cancels an in-progress drag without committing
 
-### 2.5 Update encode worker
-- [ ] Open `src/workers/encode.worker.ts`
-- [ ] Accept `cropRect` and `zoomLevel` in `INIT_WEBM_ENCODE` / `START_ENCODE` message
-- [ ] Pass them through to `SceneRenderer.drawFrame()` so every exported frame honours the crop/zoom
-- [ ] Remove cursor / polishedTrack rendering (replace with simple video-only render)
-- [ ] Remove pipeline import
+### 2.5 Update encode worker ✓
+- [x] `START_ENCODE` and `INIT_WEBM_ENCODE` now accept `cropRect` and `zoomLevel` (no track/session/coordTransform)
+- [x] Both MP4 and WebM paths call `renderer.render(ctx, frame, sceneConfig, cropRect, zoomLevel)`
+- [x] Removed ZoomController, cursor interpolation, transformPoint, getCursorAtTime, pipeline import
+- [x] `editorStore` postMessage calls updated; `startMp4Export`/`startWebmExport` simplified to no-arg video
 
-### 2.6 Update EncodeWorkerIn type
-- [ ] In `src/types/index.ts`, update `EncodeWorkerIn` to include `cropRect: CropRect | null` and `zoomLevel: number`
-- [ ] Remove `track: PolishedTrack` (no cursor track needed)
+### 2.6 Update EncodeWorkerIn type ✓
+- [x] `EncodeWorkerIn` updated: `cropRect: CropRect | null` and `zoomLevel: number` replace `track`, `session`, `coordTransform`
 
 ### 2.7 Simplify editor entry + upload zone
 - [ ] `src/editor/editor.ts`: remove pipeline worker launch, remove `polishedTrack` handling
