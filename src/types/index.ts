@@ -163,6 +163,19 @@ export interface CoordTransform {
   offsetY: number;
 }
 
+// ─── Crop / zoom ──────────────────────────────────────────────────────────────
+
+export interface CropRect {
+  /** 0–1 relative to video natural width */
+  x: number;
+  /** 0–1 relative to video natural height */
+  y: number;
+  /** 0–1 fraction of video natural width */
+  w: number;
+  /** 0–1 fraction of video natural height */
+  h: number;
+}
+
 // ─── Editor state ─────────────────────────────────────────────────────────────
 
 export type EditorPhase =
@@ -184,6 +197,8 @@ export interface EditorState {
   showRawCursor: boolean;
   exportProgress: number;
   error: string | null;
+  cropRect: CropRect | null;
+  zoomLevel: number;
 }
 
 // ─── Worker messages ──────────────────────────────────────────────────────────

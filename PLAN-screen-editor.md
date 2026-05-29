@@ -126,18 +126,11 @@ src/
 
 ## Phase 2 Todo List — Video Editor
 
-### 2.1 Add CropRect type
-- [ ] In `src/types/index.ts` add:
-  ```typescript
-  export interface CropRect {
-    x: number; // 0–1 relative to video natural size
-    y: number;
-    w: number;
-    h: number;
-  }
-  ```
-- [ ] Add `cropRect: CropRect | null` and `zoomLevel: number` to `EditorState`
-- [ ] Add defaults: `cropRect: null`, `zoomLevel: 1.0` in `defaults.ts`
+### 2.1 Add CropRect type ✓
+- [x] In `src/types/index.ts` add `CropRect` interface (x, y, w, h as 0–1 fractions)
+- [x] Add `cropRect: CropRect | null` and `zoomLevel: number` to `EditorState`
+- [x] Add `DEFAULT_CROP_RECT = null` and `DEFAULT_ZOOM_LEVEL = 1.0` to `defaults.ts`
+- [x] Wire into `editorStore` initial state; export `setCropRect` and `setZoomLevel` actions
 
 ### 2.2 Update SceneRenderer for crop + zoom
 - [ ] Open `src/renderer/sceneRenderer.ts`

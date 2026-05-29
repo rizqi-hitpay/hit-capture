@@ -7,8 +7,9 @@ import type {
   PipelineParams,
   SceneConfig,
   PolishedTrack,
+  CropRect,
 } from '../../types';
-import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG } from './defaults';
+import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CROP_RECT, DEFAULT_ZOOM_LEVEL } from './defaults';
 import { identityTransform } from '../../shared/coords';
 import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
 
@@ -54,6 +55,8 @@ const INITIAL: EditorState = {
   showRawCursor: false,
   exportProgress: 0,
   error: null,
+  cropRect: DEFAULT_CROP_RECT,
+  zoomLevel: DEFAULT_ZOOM_LEVEL,
 };
 
 export const store = new Atom<EditorState>(INITIAL);
@@ -123,6 +126,14 @@ export function updateSceneConfig(partial: Partial<SceneConfig>): void {
 
 export function setShowRawCursor(show: boolean): void {
   store.set((prev) => ({ ...prev, showRawCursor: show }));
+}
+
+export function setCropRect(rect: CropRect | null): void {
+  store.set((prev) => ({ ...prev, cropRect: rect }));
+}
+
+export function setZoomLevel(level: number): void {
+  store.set((prev) => ({ ...prev, zoomLevel: level }));
 }
 
 export async function startExport(): Promise<void> {

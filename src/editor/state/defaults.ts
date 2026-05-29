@@ -18,6 +18,9 @@ import {
   DEFAULT_ZOOM_SENSITIVITY,
 } from '../../shared/constants';
 
+export const DEFAULT_CROP_RECT = null;
+export const DEFAULT_ZOOM_LEVEL = 1.0;
+
 export const DEFAULT_PIPELINE_PARAMS: PipelineParams = {
   smoothingStrength: 0.65,
   dwellThresholdPx: DWELL_THRESHOLD_PX,
