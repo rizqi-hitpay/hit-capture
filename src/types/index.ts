@@ -181,10 +181,11 @@ export interface CropRect {
 }
 
 /**
- * Controls which part of the video is visible inside the floating window.
- * 0 = show left/top edge · 0.5 = centred (default) · 1 = show right/bottom edge
+ * Canvas-fraction position of the video's center point.
+ * { x: 0.5, y: 0.5 } places the video centered on the canvas (default).
+ * Moving this independently of containerRect pans the video behind the container.
  */
-export interface VideoOffset {
+export interface VideoCenter {
   x: number;
   y: number;
 }
@@ -212,8 +213,8 @@ export interface EditorState {
   error: string | null;
   cropRect: CropRect | null;
   zoomLevel: number;
-  cropMode: boolean;
-  videoOffset: VideoOffset;
+  videoCenter: VideoCenter;
+  editContainerMode: boolean;
 }
 
 // ─── Worker messages ──────────────────────────────────────────────────────────
@@ -230,8 +231,8 @@ export type PipelineWorkerOut =
   | { type: 'ERROR'; message: string };
 
 export type EncodeWorkerIn =
-  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoOffset: VideoOffset }
-  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoOffset: VideoOffset; estimatedFrames: number }
+  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter }
+  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; estimatedFrames: number }
   | { type: 'WEBM_FRAME'; frame: VideoFrame }
   | { type: 'END_WEBM_ENCODE' };
 

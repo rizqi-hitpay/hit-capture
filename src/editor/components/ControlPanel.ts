@@ -1,10 +1,7 @@
 import {
   store,
   updateSceneConfig,
-  setCropRect,
-  setZoomLevel,
-  setCropMode,
-  setVideoOffset,
+  setEditContainerMode,
 } from '../state/editorStore';
 import type { EditorState, GradientPresetId } from '../../types';
 import { GRADIENT_IDS, GRADIENT_PRESETS } from '../../renderer/gradientPresets';
@@ -38,11 +35,6 @@ export class ControlPanel {
               </button>
             `).join('')}
           </div>
-          <div class="control-row" style="margin-top:12px">
-            <label class="control-label">Padding</label>
-            <span class="control-value" id="pad-val">40px</span>
-          </div>
-          <input type="range" id="padding" class="slider" min="0" max="120" step="4" value="40" />
           <div class="control-row" style="margin-top:8px">
             <label class="control-label">Corner radius</label>
             <span class="control-value" id="radius-val">12px</span>
@@ -50,39 +42,11 @@ export class ControlPanel {
           <input type="range" id="corner-radius" class="slider" min="0" max="48" step="2" value="12" />
         </section>
 
-        <!-- Crop -->
+        <!-- Container -->
         <section class="panel-section">
-          <h3 class="panel-heading">Crop</h3>
-          <button class="btn-crop-draw" id="btn-crop-draw">Draw crop region</button>
-          <div id="crop-active-row" class="crop-active-row" style="display:none">
-            <span class="crop-active-label" id="crop-active-label"></span>
-            <button class="btn-crop-clear" id="btn-crop-clear">Clear</button>
-          </div>
-        </section>
-
-        <!-- Zoom -->
-        <section class="panel-section">
-          <h3 class="panel-heading">Zoom</h3>
-          <div class="control-row">
-            <label class="control-label">Window size</label>
-            <span class="control-value" id="zoom-val">1.0×</span>
-          </div>
-          <input type="range" id="zoom-level" class="slider" min="0.5" max="3" step="0.05" value="1" />
-        </section>
-
-        <!-- Video position -->
-        <section class="panel-section">
-          <h3 class="panel-heading">Video position</h3>
-          <div class="control-row">
-            <label class="control-label">H-offset</label>
-            <span class="control-value" id="voffset-x-val">50%</span>
-          </div>
-          <input type="range" id="voffset-x" class="slider" min="0" max="1" step="0.01" value="0.5" />
-          <div class="control-row" style="margin-top:8px">
-            <label class="control-label">V-offset</label>
-            <span class="control-value" id="voffset-y-val">50%</span>
-          </div>
-          <input type="range" id="voffset-y" class="slider" min="0" max="1" step="0.01" value="0.5" />
+          <h3 class="panel-heading">Container</h3>
+          <button class="btn-edit-container" id="btn-edit-container">Edit Container</button>
+          <p class="panel-hint" id="container-hint">Drag container to reposition on canvas</p>
         </section>
 
       </div>
@@ -109,14 +73,6 @@ export class ControlPanel {
       });
     });
 
-    // Padding
-    const padSlider = this.el.querySelector('#padding') as HTMLInputElement;
-    padSlider.addEventListener('input', () => {
-      const val = parseInt(padSlider.value);
-      (this.el.querySelector('#pad-val') as HTMLElement).textContent = `${val}px`;
-      updateSceneConfig({ window: { ...store.get().sceneConfig.window, paddingPx: val } });
-    });
-
     // Corner radius
     const radiusSlider = this.el.querySelector('#corner-radius') as HTMLInputElement;
     radiusSlider.addEventListener('input', () => {
@@ -125,38 +81,10 @@ export class ControlPanel {
       updateSceneConfig({ window: { ...store.get().sceneConfig.window, cornerRadiusPx: val } });
     });
 
-    // Crop — draw button
-    const btnDraw = this.el.querySelector('#btn-crop-draw') as HTMLButtonElement;
-    btnDraw.addEventListener('click', () => {
-      const active = !store.get().cropMode;
-      setCropMode(active);
-    });
-
-    // Crop — clear button
-    const btnClear = this.el.querySelector('#btn-crop-clear') as HTMLButtonElement;
-    btnClear.addEventListener('click', () => setCropRect(null));
-
-    // Zoom level
-    const zoomSlider = this.el.querySelector('#zoom-level') as HTMLInputElement;
-    zoomSlider.addEventListener('input', () => {
-      const val = parseFloat(zoomSlider.value);
-      (this.el.querySelector('#zoom-val') as HTMLElement).textContent = `${val.toFixed(2)}×`;
-      setZoomLevel(val);
-    });
-
-    // Video offset
-    const voffsetX = this.el.querySelector('#voffset-x') as HTMLInputElement;
-    voffsetX.addEventListener('input', () => {
-      const val = parseFloat(voffsetX.value);
-      (this.el.querySelector('#voffset-x-val') as HTMLElement).textContent = `${Math.round(val * 100)}%`;
-      setVideoOffset({ ...store.get().videoOffset, x: val });
-    });
-
-    const voffsetY = this.el.querySelector('#voffset-y') as HTMLInputElement;
-    voffsetY.addEventListener('input', () => {
-      const val = parseFloat(voffsetY.value);
-      (this.el.querySelector('#voffset-y-val') as HTMLElement).textContent = `${Math.round(val * 100)}%`;
-      setVideoOffset({ ...store.get().videoOffset, y: val });
+    // Edit container mode toggle
+    const btnEdit = this.el.querySelector('#btn-edit-container') as HTMLButtonElement;
+    btnEdit.addEventListener('click', () => {
+      setEditContainerMode(!store.get().editContainerMode);
     });
   }
 
@@ -166,14 +94,6 @@ export class ControlPanel {
       btn.classList.toggle('preset-swatch--active', btn.dataset.preset === state.sceneConfig.gradient);
     });
 
-    // Sync padding slider
-    const padSlider = this.el.querySelector('#padding') as HTMLInputElement | null;
-    if (padSlider) {
-      padSlider.value = String(state.sceneConfig.window.paddingPx);
-      (this.el.querySelector('#pad-val') as HTMLElement).textContent =
-        `${state.sceneConfig.window.paddingPx}px`;
-    }
-
     // Sync corner radius slider
     const radiusSlider = this.el.querySelector('#corner-radius') as HTMLInputElement | null;
     if (radiusSlider) {
@@ -182,48 +102,17 @@ export class ControlPanel {
         `${state.sceneConfig.window.cornerRadiusPx}px`;
     }
 
-    // Crop draw button label
-    const btnDraw = this.el.querySelector('#btn-crop-draw') as HTMLButtonElement | null;
-    if (btnDraw) {
-      btnDraw.textContent = state.cropMode ? 'Cancel crop' : 'Draw crop region';
-      btnDraw.classList.toggle('btn-crop-draw--active', state.cropMode);
+    // Edit container mode button
+    const btnEdit = this.el.querySelector('#btn-edit-container') as HTMLButtonElement | null;
+    const hint = this.el.querySelector('#container-hint') as HTMLElement | null;
+    if (btnEdit) {
+      btnEdit.classList.toggle('btn-edit-container--active', state.editContainerMode);
+      btnEdit.textContent = state.editContainerMode ? 'Done Editing' : 'Edit Container';
     }
-
-    // Crop active row
-    const cropRow = this.el.querySelector('#crop-active-row') as HTMLElement | null;
-    const cropLabel = this.el.querySelector('#crop-active-label') as HTMLElement | null;
-    if (cropRow && cropLabel) {
-      if (state.cropRect) {
-        const r = state.cropRect;
-        cropLabel.textContent =
-          `x:${(r.x * 100).toFixed(0)}% y:${(r.y * 100).toFixed(0)}% ` +
-          `${(r.w * 100).toFixed(0)}×${(r.h * 100).toFixed(0)}%`;
-        cropRow.style.display = 'flex';
-      } else {
-        cropRow.style.display = 'none';
-      }
-    }
-
-    // Sync zoom slider
-    const zoomSlider = this.el.querySelector('#zoom-level') as HTMLInputElement | null;
-    if (zoomSlider) {
-      zoomSlider.value = String(state.zoomLevel);
-      (this.el.querySelector('#zoom-val') as HTMLElement).textContent =
-        `${state.zoomLevel.toFixed(2)}×`;
-    }
-
-    // Sync video offset sliders
-    const voffsetX = this.el.querySelector('#voffset-x') as HTMLInputElement | null;
-    if (voffsetX) {
-      voffsetX.value = String(state.videoOffset.x);
-      (this.el.querySelector('#voffset-x-val') as HTMLElement).textContent =
-        `${Math.round(state.videoOffset.x * 100)}%`;
-    }
-    const voffsetY = this.el.querySelector('#voffset-y') as HTMLInputElement | null;
-    if (voffsetY) {
-      voffsetY.value = String(state.videoOffset.y);
-      (this.el.querySelector('#voffset-y-val') as HTMLElement).textContent =
-        `${Math.round(state.videoOffset.y * 100)}%`;
+    if (hint) {
+      hint.textContent = state.editContainerMode
+        ? 'Drag container to reveal different parts of the video'
+        : 'Drag container to reposition on canvas';
     }
   }
 }

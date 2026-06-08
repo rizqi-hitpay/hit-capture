@@ -7,9 +7,9 @@ import type {
   PipelineParams,
   SceneConfig,
   CropRect,
-  VideoOffset,
+  VideoCenter,
 } from '../../types';
-import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CROP_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_OFFSET } from './defaults';
+import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CONTAINER_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_CENTER } from './defaults';
 import { identityTransform } from '../../shared/coords';
 import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
 
@@ -55,10 +55,10 @@ const INITIAL: EditorState = {
   showRawCursor: false,
   exportProgress: 0,
   error: null,
-  cropRect: DEFAULT_CROP_RECT,
+  cropRect: DEFAULT_CONTAINER_RECT,
   zoomLevel: DEFAULT_ZOOM_LEVEL,
-  cropMode: false,
-  videoOffset: DEFAULT_VIDEO_OFFSET,
+  videoCenter: DEFAULT_VIDEO_CENTER,
+  editContainerMode: false,
 };
 
 export const store = new Atom<EditorState>(INITIAL);
@@ -99,6 +99,9 @@ function probeVideoDimensions(file: File): void {
         outputWidth: video.videoWidth,
         outputHeight: video.videoHeight,
       },
+      cropRect: DEFAULT_CONTAINER_RECT,
+      videoCenter: DEFAULT_VIDEO_CENTER,
+      editContainerMode: false,
       phase: 'ready',
     }));
     URL.revokeObjectURL(video.src);
@@ -131,19 +134,19 @@ export function setShowRawCursor(show: boolean): void {
 }
 
 export function setCropRect(rect: CropRect | null): void {
-  store.set((prev) => ({ ...prev, cropRect: rect, cropMode: false }));
+  store.set((prev) => ({ ...prev, cropRect: rect }));
 }
 
 export function setZoomLevel(level: number): void {
   store.set((prev) => ({ ...prev, zoomLevel: level }));
 }
 
-export function setCropMode(active: boolean): void {
-  store.set((prev) => ({ ...prev, cropMode: active }));
+export function setVideoCenter(center: VideoCenter): void {
+  store.set((prev) => ({ ...prev, videoCenter: center }));
 }
 
-export function setVideoOffset(offset: VideoOffset): void {
-  store.set((prev) => ({ ...prev, videoOffset: offset }));
+export function setEditContainerMode(active: boolean): void {
+  store.set((prev) => ({ ...prev, editContainerMode: active }));
 }
 
 export async function startExport(): Promise<void> {
@@ -178,7 +181,7 @@ export async function startExport(): Promise<void> {
 }
 
 function startMp4Export(videoFile: File): void {
-  const { sceneConfig, cropRect, zoomLevel, videoOffset } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter } = store.get();
   if (!encodeWorker) return;
 
   encodeWorker.onmessage = async (e) => {
@@ -199,11 +202,11 @@ function startMp4Export(videoFile: File): void {
     }
   };
 
-  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoOffset });
+  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoCenter });
 }
 
 async function startWebmExport(videoFile: File): Promise<void> {
-  const { sceneConfig, cropRect, zoomLevel, videoOffset } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter } = store.get();
   if (!encodeWorker) return;
   const worker = encodeWorker;
 
@@ -232,7 +235,7 @@ async function startWebmExport(videoFile: File): Promise<void> {
   // The loop breaks early once targetSec >= actual duration anyway.
   const estimatedFrames = Math.ceil((videoFile.size / 50_000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoOffset, estimatedFrames });
+  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames });
   await waitForWebmAck();
 
   if (encodeWorker === null) return;

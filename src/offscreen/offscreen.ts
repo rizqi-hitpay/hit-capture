@@ -59,6 +59,8 @@ async function startRecording(streamId: string): Promise<void> {
         mandatory: {
           chromeMediaSource: 'tab',
           chromeMediaSourceId: streamId,
+          maxWidth: 1920,
+          maxHeight: 1080,
           maxFrameRate: 30,
         },
       },

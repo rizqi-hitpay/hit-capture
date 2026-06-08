@@ -1,15 +1,98 @@
-import { store, setCropRect, setCropMode } from '../state/editorStore';
+import { store, setCropRect, setVideoCenter } from '../state/editorStore';
 import type { EditorState, CropRect } from '../../types';
 import { SceneRenderer } from '../../renderer/sceneRenderer';
 import { PREVIEW_SCALE } from '../../shared/constants';
 
-// Drag state for crop drawing
-interface DragState {
-  startX: number; // canvas-space
-  startY: number;
-  curX: number;
-  curY: number;
+// ─── Container interaction types ─────────────────────────────────────────────
+
+type HandleId = 'nw' | 'n' | 'ne' | 'w' | 'e' | 'sw' | 's' | 'se';
+
+type InteractionMode =
+  | { kind: 'idle' }
+  | { kind: 'drawing'; startX: number; startY: number; curX: number; curY: number }
+  | { kind: 'moving';  startX: number; startY: number; origRect: CropRect; origVideoCenter: { x: number; y: number } }
+  | { kind: 'resizing'; handle: HandleId; startX: number; startY: number; origRect: CropRect };
+
+const HANDLE_SIZE = 8;   // px square side
+const HANDLE_HIT  = 12;  // px hit radius (generous for small handles)
+const MIN_SIZE    = 0.05; // minimum container dimension as fraction
+const MIN_DRAW_PX = 16;  // discard micro-drags
+
+const HANDLE_CURSORS: Record<HandleId, string> = {
+  nw: 'nw-resize', n: 'n-resize', ne: 'ne-resize',
+   w:  'w-resize',                  e:  'e-resize',
+  sw: 'sw-resize', s: 's-resize', se: 'se-resize',
+};
+
+// ─── Pure helpers ────────────────────────────────────────────────────────────
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
+
+interface Rect { x: number; y: number; w: number; h: number; }
+
+function handleCenters(r: Rect): Record<HandleId, { cx: number; cy: number }> {
+  const mx = r.x + r.w / 2;
+  const my = r.y + r.h / 2;
+  const rx = r.x + r.w;
+  const ry = r.y + r.h;
+  return {
+    nw: { cx: r.x, cy: r.y },  n: { cx: mx, cy: r.y },  ne: { cx: rx, cy: r.y },
+     w: { cx: r.x, cy: my },                               e: { cx: rx, cy: my },
+    sw: { cx: r.x, cy: ry },   s: { cx: mx, cy: ry },   se: { cx: rx, cy: ry },
+  };
+}
+
+function hitTestContainer(
+  px: number, py: number,
+  r: Rect,
+): { zone: 'handle'; id: HandleId } | { zone: 'body' } | { zone: 'outside' } {
+  const centers = handleCenters(r);
+  for (const [id, { cx, cy }] of Object.entries(centers) as [HandleId, { cx: number; cy: number }][]) {
+    if (Math.abs(px - cx) <= HANDLE_HIT && Math.abs(py - cy) <= HANDLE_HIT) {
+      return { zone: 'handle', id };
+    }
+  }
+  if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
+    return { zone: 'body' };
+  }
+  return { zone: 'outside' };
+}
+
+function applyResize(
+  orig: CropRect,
+  handle: HandleId,
+  startX: number, startY: number,
+  curX: number,   curY: number,
+  canvasW: number, canvasH: number,
+): CropRect {
+  const dx = (curX - startX) / canvasW;
+  const dy = (curY - startY) / canvasH;
+
+  let { x, y, w, h } = orig;
+
+  if (handle === 'nw' || handle === 'w' || handle === 'sw') {
+    const newX = clamp(x + dx, 0, x + w - MIN_SIZE);
+    w = w + (x - newX);
+    x = newX;
+  }
+  if (handle === 'ne' || handle === 'e' || handle === 'se') {
+    w = clamp(w + dx, MIN_SIZE, 1 - x);
+  }
+  if (handle === 'nw' || handle === 'n' || handle === 'ne') {
+    const newY = clamp(y + dy, 0, y + h - MIN_SIZE);
+    h = h + (y - newY);
+    y = newY;
+  }
+  if (handle === 'sw' || handle === 's' || handle === 'se') {
+    h = clamp(h + dy, MIN_SIZE, 1 - y);
+  }
+
+  return { x, y, w, h };
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export class PreviewCanvas {
   private canvas: HTMLCanvasElement;
@@ -19,7 +102,7 @@ export class PreviewCanvas {
   private rafId: number | null = null;
   private unsub: (() => void) | null = null;
   private playing = false;
-  private drag: DragState | null = null;
+  private imode: InteractionMode = { kind: 'idle' };
 
   constructor(container: HTMLElement) {
     container.innerHTML = `
@@ -47,7 +130,7 @@ export class PreviewCanvas {
     document.body.appendChild(this.video);
 
     this.attachPlaybackControls(container);
-    this.attachCropListeners();
+    this.attachContainerListeners();
     this.unsub = store.subscribe((state) => this.onStateChange(state));
   }
 
@@ -61,7 +144,6 @@ export class PreviewCanvas {
   }
 
   private onStateChange(state: EditorState): void {
-    // Load new video file
     if (state.videoFile && this.video.src === '') {
       this.video.src = URL.createObjectURL(state.videoFile);
       this.video.load();
@@ -81,9 +163,6 @@ export class PreviewCanvas {
       }
       this.startLoop();
     }
-
-    // Update canvas cursor style based on crop mode
-    this.canvas.style.cursor = state.cropMode ? 'crosshair' : 'default';
   }
 
   // ─── Render loop ────────────────────────────────────────────────────────────
@@ -130,134 +209,207 @@ export class PreviewCanvas {
       previewConfig,
       cropRect,
       zoomLevel,
-      state.videoOffset,
+      state.videoCenter,
     );
 
-    // Overlay: current crop rect guide (dashed orange border)
-    if (cropRect && !state.cropMode) {
-      this.drawCropGuide(previewW, previewH, cropRect);
-    }
-
-    // Overlay: active drag selection
-    if (state.cropMode && this.drag) {
-      this.drawDragSelection(this.drag);
-    }
-
+    this.drawContainerOverlay();
     this.updateTimeDisplay();
   }
 
-  // ─── Crop overlay helpers ────────────────────────────────────────────────────
+  // ─── Container overlay ───────────────────────────────────────────────────────
 
-  /** Returns the floating window rect in preview-canvas pixels (when no cropRect). */
-  private windowRect(previewW: number, previewH: number, paddingPx: number, zoomLevel: number) {
-    const baseW = previewW - paddingPx * 2;
-    const baseH = previewH - paddingPx * 2;
-    const winW = baseW * zoomLevel;
-    const winH = baseH * zoomLevel;
-    return { x: (previewW - winW) / 2, y: (previewH - winH) / 2, w: winW, h: winH };
-  }
+  private drawContainerOverlay(): void {
+    if (this.imode.kind === 'drawing') {
+      this.drawDrawingOverlay();
+      return;
+    }
 
-  private drawCropGuide(previewW: number, previewH: number, crop: CropRect): void {
-    const x = crop.x * previewW;
-    const y = crop.y * previewH;
-    const w = crop.w * previewW;
-    const h = crop.h * previewH;
+    const r = store.get().cropRect;
+    if (!r) return;
+
+    const cW = this.canvas.width;
+    const cH = this.canvas.height;
+    const x = r.x * cW;
+    const y = r.y * cH;
+    const w = r.w * cW;
+    const h = r.h * cH;
 
     this.ctx.save();
-    this.ctx.strokeStyle = '#f6ad55';
+
+    // Dashed white border
+    this.ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.setLineDash([5, 4]);
+    this.ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    this.ctx.setLineDash([]);
+
+    // 8 resize handles — white fill, indigo border
+    const hs = HANDLE_SIZE;
+    const centers = handleCenters({ x, y, w, h });
+    for (const { cx, cy } of Object.values(centers)) {
+      this.ctx.fillStyle = '#fff';
+      this.ctx.strokeStyle = '#6366f1';
+      this.ctx.lineWidth = 1.5;
+      this.ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+      this.ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+    }
+
+    this.ctx.restore();
+  }
+
+  private drawDrawingOverlay(): void {
+    if (this.imode.kind !== 'drawing') return;
+    const { startX, startY, curX, curY } = this.imode;
+    const x = Math.min(startX, curX);
+    const y = Math.min(startY, curY);
+    const w = Math.abs(curX - startX);
+    const h = Math.abs(curY - startY);
+
+    this.ctx.save();
+    this.ctx.strokeStyle = '#6366f1';
     this.ctx.lineWidth = 1.5;
     this.ctx.setLineDash([6, 3]);
-    this.ctx.strokeRect(x, y, w, h);
+    this.ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     this.ctx.setLineDash([]);
     this.ctx.restore();
   }
 
-  private drawDragSelection(drag: DragState): void {
-    const x = Math.min(drag.startX, drag.curX);
-    const y = Math.min(drag.startY, drag.curY);
-    const w = Math.abs(drag.curX - drag.startX);
-    const h = Math.abs(drag.curY - drag.startY);
+  // ─── Container interaction ───────────────────────────────────────────────────
 
-    this.ctx.save();
-    // Dark overlay
-    this.ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    // Clear selection area
-    this.ctx.clearRect(x, y, w, h);
-    // Re-render just the selection (draw over the cleared area with the scene)
-    // — keep it simple: just show the orange border with corner handles
-    this.ctx.strokeStyle = '#f6ad55';
-    this.ctx.lineWidth = 1.5;
-    this.ctx.setLineDash([]);
-    this.ctx.strokeRect(x, y, w, h);
-    // Rule-of-thirds guides inside selection
-    this.ctx.strokeStyle = 'rgba(246,173,85,0.35)';
-    this.ctx.lineWidth = 0.5;
-    for (let i = 1; i < 3; i++) {
-      const gx = x + (w / 3) * i;
-      const gy = y + (h / 3) * i;
-      this.ctx.beginPath(); this.ctx.moveTo(gx, y); this.ctx.lineTo(gx, y + h); this.ctx.stroke();
-      this.ctx.beginPath(); this.ctx.moveTo(x, gy); this.ctx.lineTo(x + w, gy); this.ctx.stroke();
-    }
-    this.ctx.restore();
+  private containerPx(): Rect | null {
+    const r = store.get().cropRect;
+    if (!r) return null;
+    return {
+      x: r.x * this.canvas.width,
+      y: r.y * this.canvas.height,
+      w: r.w * this.canvas.width,
+      h: r.h * this.canvas.height,
+    };
   }
 
-  // ─── Crop mouse events ───────────────────────────────────────────────────────
-
-  private attachCropListeners(): void {
+  private attachContainerListeners(): void {
     this.canvas.addEventListener('mousedown', (e) => {
-      if (!store.get().cropMode) return;
+      if (store.get().phase !== 'ready') return;
       const pos = this.canvasPos(e);
-      this.drag = { startX: pos.x, startY: pos.y, curX: pos.x, curY: pos.y };
+      const container = this.containerPx();
+
+      if (container) {
+        const hit = hitTestContainer(pos.x, pos.y, container);
+        if (hit.zone === 'handle') {
+          const origRect = store.get().cropRect!;
+          this.imode = { kind: 'resizing', handle: hit.id, startX: pos.x, startY: pos.y, origRect };
+          e.preventDefault();
+          return;
+        }
+        if (hit.zone === 'body') {
+          const { cropRect, videoCenter } = store.get();
+          this.imode = {
+            kind: 'moving',
+            startX: pos.x,
+            startY: pos.y,
+            origRect: cropRect!,
+            origVideoCenter: { ...videoCenter },
+          };
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Click on background → start drawing new container
+      this.imode = { kind: 'drawing', startX: pos.x, startY: pos.y, curX: pos.x, curY: pos.y };
       e.preventDefault();
     });
 
     this.canvas.addEventListener('mousemove', (e) => {
-      if (!this.drag) return;
       const pos = this.canvasPos(e);
-      this.drag = { ...this.drag, curX: pos.x, curY: pos.y };
-    });
 
-    const commitDrag = () => {
-      if (!this.drag) return;
-      const state = store.get();
-      if (!state.cropMode) { this.drag = null; return; }
-
-      const cW = this.canvas.width;
-      const cH = this.canvas.height;
-
-      const x0 = Math.min(this.drag.startX, this.drag.curX);
-      const y0 = Math.min(this.drag.startY, this.drag.curY);
-      const x1 = Math.max(this.drag.startX, this.drag.curX);
-      const y1 = Math.max(this.drag.startY, this.drag.curY);
-      const rectW = x1 - x0;
-      const rectH = y1 - y0;
-
-      // Only commit if the drawn rect is large enough to be intentional
-      if (rectW > 8 && rectH > 8) {
-        // Save as fractions of the output canvas (clamped to [0,1])
-        const crop: CropRect = {
-          x: Math.max(0, Math.min(1, x0 / cW)),
-          y: Math.max(0, Math.min(1, y0 / cH)),
-          w: Math.max(0, Math.min(1 - x0 / cW, rectW / cW)),
-          h: Math.max(0, Math.min(1 - y0 / cH, rectH / cH)),
-        };
-        setCropRect(crop); // also sets cropMode = false
-      } else {
-        setCropMode(false);
+      if (this.imode.kind === 'idle') {
+        const container = this.containerPx();
+        if (container) {
+          const hit = hitTestContainer(pos.x, pos.y, container);
+          if (hit.zone === 'handle') {
+            this.canvas.style.cursor = HANDLE_CURSORS[hit.id];
+          } else if (hit.zone === 'body') {
+            this.canvas.style.cursor = 'move';
+          } else {
+            this.canvas.style.cursor = 'crosshair';
+          }
+        } else {
+          this.canvas.style.cursor = 'crosshair';
+        }
+        return;
       }
 
-      this.drag = null;
-    };
+      if (this.imode.kind === 'drawing') {
+        this.imode = { ...this.imode, curX: pos.x, curY: pos.y };
+        return;
+      }
 
-    this.canvas.addEventListener('mouseup', commitDrag);
+      if (this.imode.kind === 'moving') {
+        const { startX, startY, origRect, origVideoCenter } = this.imode;
+        const dx = (pos.x - startX) / this.canvas.width;
+        const dy = (pos.y - startY) / this.canvas.height;
+        const newRect = {
+          ...origRect,
+          x: clamp(origRect.x + dx, 0, 1 - origRect.w),
+          y: clamp(origRect.y + dy, 0, 1 - origRect.h),
+        };
+        setCropRect(newRect);
+        if (!store.get().editContainerMode) {
+          // Non-edit mode: move video center by same delta → same video content stays visible
+          setVideoCenter({
+            x: origVideoCenter.x + dx,
+            y: origVideoCenter.y + dy,
+          });
+        }
+        return;
+      }
+
+      if (this.imode.kind === 'resizing') {
+        const { handle, startX, startY, origRect } = this.imode;
+        setCropRect(applyResize(origRect, handle, startX, startY, pos.x, pos.y, this.canvas.width, this.canvas.height));
+        return;
+      }
+    });
+
+    this.canvas.addEventListener('mouseup', () => {
+      if (this.imode.kind === 'drawing') {
+        this.commitDraw();
+      }
+      this.imode = { kind: 'idle' };
+      this.canvas.style.cursor = 'crosshair';
+    });
+
     this.canvas.addEventListener('mouseleave', () => {
-      // Cancel drag if mouse leaves canvas
-      if (this.drag) { this.drag = null; setCropMode(false); }
+      if (this.imode.kind === 'drawing') {
+        // Discard in-progress draw — leave existing container unchanged
+      }
+      // moving/resizing: live state is already committed to store, nothing to do
+      this.imode = { kind: 'idle' };
     });
   }
 
-  /** Convert a MouseEvent to canvas-pixel coordinates. */
+  private commitDraw(): void {
+    if (this.imode.kind !== 'drawing') return;
+    const { startX, startY, curX, curY } = this.imode;
+    const x0 = Math.min(startX, curX);
+    const y0 = Math.min(startY, curY);
+    const x1 = Math.max(startX, curX);
+    const y1 = Math.max(startY, curY);
+    const wPx = x1 - x0;
+    const hPx = y1 - y0;
+
+    if (wPx > MIN_DRAW_PX && hPx > MIN_DRAW_PX) {
+      setCropRect({
+        x: clamp(x0 / this.canvas.width,  0, 1),
+        y: clamp(y0 / this.canvas.height, 0, 1),
+        w: clamp(wPx / this.canvas.width,  0, 1 - x0 / this.canvas.width),
+        h: clamp(hPx / this.canvas.height, 0, 1 - y0 / this.canvas.height),
+      });
+    }
+  }
+
+  /** Convert a MouseEvent to canvas-pixel coordinates (accounting for CSS scaling). */
   private canvasPos(e: MouseEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     const scaleX = this.canvas.width  / rect.width;

@@ -345,8 +345,9 @@ html, body {
 .toggle input:checked + .toggle-track { background: var(--accent); }
 .toggle input:checked + .toggle-track::after { left: 16px; background: #fff; }
 
-/* ─── Crop controls ────────────────────────────────────────────── */
-.btn-crop-draw {
+
+/* ─── Edit container button ────────────────────────────────────── */
+.btn-edit-container {
   width: 100%;
   padding: 7px 0;
   background: var(--bg-3);
@@ -358,39 +359,19 @@ html, body {
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.btn-crop-draw:hover { background: var(--border); color: var(--text); }
-.btn-crop-draw--active {
+.btn-edit-container:hover { background: var(--border); color: var(--text); }
+.btn-edit-container--active {
   background: rgba(99,102,241,0.15);
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.crop-active-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  gap: 8px;
-}
-
-.crop-active-label {
+.panel-hint {
   font-size: 11px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.btn-crop-clear {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
   color: var(--text-3);
-  font-size: 11px;
-  padding: 3px 8px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
+  margin-top: 8px;
+  line-height: 1.5;
 }
-.btn-crop-clear:hover { background: var(--border); color: var(--text); }
 
 /* ─── Before/After toggle ──────────────────────────────────────── */
 .before-after {

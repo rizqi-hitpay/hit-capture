@@ -3,7 +3,7 @@
  * Composites: gradient background → floating window (video).
  * Works with both CanvasRenderingContext2D and OffscreenCanvasRenderingContext2D.
  */
-import type { SceneConfig, RenderFrameData, CropRect, VideoOffset } from '../types';
+import type { SceneConfig, RenderFrameData, CropRect, VideoCenter } from '../types';
 import { GRADIENT_PRESETS, createGradient } from './gradientPresets';
 
 type AnyCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -16,12 +16,12 @@ export class SceneRenderer {
    * Render a single frame onto ctx.
    * The canvas must already be sized to sceneConfig.outputWidth × outputHeight.
    *
-   * @param cropRect    When set, defines the floating window position and size as
-   *                    fractions of the output canvas (x, y, w, h in [0, 1]).
-   *                    When null, the window fills the padded area scaled by zoomLevel.
-   * @param zoomLevel   Scale factor applied when no cropRect is set (1.0 = fill padded area).
-   * @param videoOffset Controls which part of the video is visible inside the window.
-   *                    { x: 0.5, y: 0.5 } = centred (default).
+   * @param cropRect    Defines the visible container window as fractions of the output
+   *                    canvas (x, y, w, h in [0, 1]). The container is a viewport mask —
+   *                    the video renders at full canvas size behind it.
+   * @param zoomLevel   Scale factor applied when no cropRect is set (fallback only).
+   * @param videoCenter Canvas-fraction position of the video's center point.
+   *                    { x: 0.5, y: 0.5 } places the video centred on the canvas.
    */
   render(
     ctx: AnyCtx,
@@ -29,11 +29,11 @@ export class SceneRenderer {
     config: SceneConfig,
     cropRect: CropRect | null = null,
     zoomLevel = 1.0,
-    videoOffset: VideoOffset = { x: 0.5, y: 0.5 },
+    videoCenter: VideoCenter = { x: 0.5, y: 0.5 },
   ): void {
     const { outputWidth: W, outputHeight: H } = config;
     this.drawBackground(ctx, config, W, H);
-    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel, videoOffset);
+    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel, videoCenter);
   }
 
   private drawBackground(ctx: AnyCtx, config: SceneConfig, W: number, H: number): void {
@@ -59,7 +59,7 @@ export class SceneRenderer {
     H: number,
     cropRect: CropRect | null,
     zoomLevel: number,
-    videoOffset: VideoOffset,
+    videoCenter: VideoCenter,
   ): void {
     const { paddingPx, cornerRadiusPx, shadowBlur, shadowAlpha } = config.window;
 
@@ -112,31 +112,34 @@ export class SceneRenderer {
         let natW: number;
         let natH: number;
         if (isVideoEl) {
-          natW = (src as HTMLVideoElement).videoWidth  || winW;
-          natH = (src as HTMLVideoElement).videoHeight || winH;
+          natW = (src as HTMLVideoElement).videoWidth  || W;
+          natH = (src as HTMLVideoElement).videoHeight || H;
         } else if (typeof VideoFrame !== 'undefined' && src instanceof VideoFrame) {
-          natW = (src as VideoFrame).displayWidth  || winW;
-          natH = (src as VideoFrame).displayHeight || winH;
+          natW = (src as VideoFrame).displayWidth  || W;
+          natH = (src as VideoFrame).displayHeight || H;
         } else if (src instanceof ImageBitmap) {
-          natW = src.width  || winW;
-          natH = src.height || winH;
+          natW = src.width  || W;
+          natH = src.height || H;
         } else {
-          natW = winW;
-          natH = winH;
+          natW = W;
+          natH = H;
         }
 
-        // Cover-crop: scale so the shorter axis fills the window.
-        // videoOffset always pans within the full source video regardless of cropRect.
-        const scale = Math.max(winW / natW, winH / natH);
-        const srcW  = winW / scale;
-        const srcH  = winH / scale;
-        const sx    = (natW - srcW) * videoOffset.x;
-        const sy    = (natH - srcH) * videoOffset.y;
+        // Scale video to cover the canvas. Position the video so its center
+        // is at (videoCenter.x * W, videoCenter.y * H). The container clip
+        // acts as a viewport mask — only the portion under the container is
+        // visible. Moving the container reveals different parts of the video
+        // without affecting its scale.
+        const scale   = Math.max(W / natW, H / natH);
+        const scaledW = natW * scale;
+        const scaledH = natH * scale;
+        const videoX  = videoCenter.x * W - scaledW / 2;
+        const videoY  = videoCenter.y * H - scaledH / 2;
 
         ctx.drawImage(
           src as CanvasImageSource,
-          sx, sy, srcW, srcH,
-          winX, winY, winW, winH,
+          0, 0, natW, natH,
+          videoX, videoY, scaledW, scaledH,
         );
       }
     }

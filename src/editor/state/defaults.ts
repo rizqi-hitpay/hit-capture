@@ -1,4 +1,4 @@
-import type { PipelineParams, SceneConfig } from '../../types';
+import type { PipelineParams, SceneConfig, CropRect, VideoCenter } from '../../types';
 import {
   DWELL_THRESHOLD_PX,
   DWELL_THRESHOLD_MS,
@@ -18,9 +18,9 @@ import {
   DEFAULT_ZOOM_SENSITIVITY,
 } from '../../shared/constants';
 
-export const DEFAULT_CROP_RECT = null;
+export const DEFAULT_CONTAINER_RECT: CropRect = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
 export const DEFAULT_ZOOM_LEVEL = 1.0;
-export const DEFAULT_VIDEO_OFFSET = { x: 0.5, y: 0.5 };
+export const DEFAULT_VIDEO_CENTER: VideoCenter = { x: 0.5, y: 0.5 };
 
 export const DEFAULT_PIPELINE_PARAMS: PipelineParams = {
   smoothingStrength: 0.65,
