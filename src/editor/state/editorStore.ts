@@ -4,12 +4,15 @@
  */
 import type {
   EditorState,
+  EditorMode,
   PipelineParams,
   SceneConfig,
   CropRect,
   VideoCenter,
+  Keyframe,
 } from '../../types';
-import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CONTAINER_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_CENTER } from './defaults';
+import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CONTAINER_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_CENTER, DEFAULT_KEYFRAMES, DEFAULT_SELECTED_KEYFRAME_ID, DEFAULT_EDITOR_MODE } from './defaults';
+import { getStateAtTime } from '../utils/keyframeInterpolation';
 import { identityTransform } from '../../shared/coords';
 import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
 
@@ -59,6 +62,9 @@ const INITIAL: EditorState = {
   zoomLevel: DEFAULT_ZOOM_LEVEL,
   videoCenter: DEFAULT_VIDEO_CENTER,
   editContainerMode: false,
+  keyframes: DEFAULT_KEYFRAMES,
+  selectedKeyframeId: DEFAULT_SELECTED_KEYFRAME_ID,
+  editorMode: DEFAULT_EDITOR_MODE,
 };
 
 export const store = new Atom<EditorState>(INITIAL);
@@ -102,6 +108,9 @@ function probeVideoDimensions(file: File): void {
       cropRect: DEFAULT_CONTAINER_RECT,
       videoCenter: DEFAULT_VIDEO_CENTER,
       editContainerMode: false,
+      keyframes: DEFAULT_KEYFRAMES,
+      selectedKeyframeId: DEFAULT_SELECTED_KEYFRAME_ID,
+      editorMode: DEFAULT_EDITOR_MODE,
       phase: 'ready',
     }));
     URL.revokeObjectURL(video.src);
@@ -149,6 +158,128 @@ export function setEditContainerMode(active: boolean): void {
   store.set((prev) => ({ ...prev, editContainerMode: active }));
 }
 
+export function setEditorMode(mode: EditorMode): void {
+  store.set((prev) => ({
+    ...prev,
+    editorMode: mode,
+    // entering preview clears KF selection so interpolation takes over immediately
+    selectedKeyframeId: mode === 'preview' ? null : prev.selectedKeyframeId,
+  }));
+}
+
+// ─── Undo history ─────────────────────────────────────────────────────────────
+
+interface HistoryEntry {
+  keyframes: Keyframe[];
+  selectedKeyframeId: string | null;
+}
+
+const kfHistory: HistoryEntry[] = [];
+const MAX_HISTORY = 50;
+
+function pushHistory(): void {
+  const { keyframes, selectedKeyframeId } = store.get();
+  kfHistory.push({ keyframes: keyframes.map((kf) => ({ ...kf })), selectedKeyframeId });
+  if (kfHistory.length > MAX_HISTORY) kfHistory.shift();
+}
+
+export function undoKeyframe(): void {
+  const entry = kfHistory.pop();
+  if (entry) {
+    store.set((prev) => ({ ...prev, keyframes: entry.keyframes, selectedKeyframeId: entry.selectedKeyframeId }));
+  }
+}
+
+export function canUndoKeyframe(): boolean {
+  return kfHistory.length > 0;
+}
+
+// ─── Keyframe actions ─────────────────────────────────────────────────────────
+
+export function addKeyframe(time: number): void {
+  const state = store.get();
+  const { keyframes, cropRect, videoCenter, zoomLevel, selectedKeyframeId } = state;
+
+  let containerRect = cropRect ?? DEFAULT_CONTAINER_RECT;
+  let vc = videoCenter;
+  let zoom = zoomLevel;
+
+  if (keyframes.length > 0 && selectedKeyframeId === null) {
+    const interp = getStateAtTime(keyframes, time);
+    if (interp) {
+      containerRect = interp.containerRect;
+      vc = interp.videoCenter;
+      zoom = interp.zoom;
+    }
+  }
+
+  pushHistory();
+  const id = crypto.randomUUID();
+  const newKf: Keyframe = { id, time, containerRect, videoCenter: vc, zoom };
+  const sorted = [...keyframes, newKf].sort((a, b) => a.time - b.time);
+
+  store.set((prev) => ({
+    ...prev,
+    keyframes: sorted,
+    selectedKeyframeId: id,
+    cropRect: containerRect,
+    videoCenter: vc,
+    zoomLevel: zoom,
+  }));
+}
+
+export function duplicateKeyframe(id: string, time: number): void {
+  const src = store.get().keyframes.find((k) => k.id === id);
+  if (!src) return;
+  pushHistory();
+  const newId = crypto.randomUUID();
+  const newKf: Keyframe = { ...src, id: newId, time };
+  const sorted = [...store.get().keyframes, newKf].sort((a, b) => a.time - b.time);
+  store.set((prev) => ({
+    ...prev,
+    keyframes: sorted,
+    selectedKeyframeId: newId,
+    cropRect: src.containerRect,
+    videoCenter: src.videoCenter,
+    zoomLevel: src.zoom,
+  }));
+}
+
+export function updateKeyframe(id: string, partial: Partial<Omit<Keyframe, 'id'>>): void {
+  if (partial.time !== undefined) pushHistory();
+  store.set((prev) => ({
+    ...prev,
+    keyframes: prev.keyframes
+      .map((kf) => kf.id === id ? { ...kf, ...partial } : kf)
+      .sort((a, b) => a.time - b.time),
+  }));
+}
+
+export function deleteKeyframe(id: string): void {
+  pushHistory();
+  store.set((prev) => ({
+    ...prev,
+    keyframes: prev.keyframes.filter((kf) => kf.id !== id),
+    selectedKeyframeId: prev.selectedKeyframeId === id ? null : prev.selectedKeyframeId,
+  }));
+}
+
+export function selectKeyframe(id: string | null): void {
+  if (id === null) {
+    store.set((prev) => ({ ...prev, selectedKeyframeId: null }));
+    return;
+  }
+  const kf = store.get().keyframes.find((k) => k.id === id);
+  if (!kf) return;
+  store.set((prev) => ({
+    ...prev,
+    selectedKeyframeId: id,
+    cropRect: kf.containerRect,
+    videoCenter: kf.videoCenter,
+    zoomLevel: kf.zoom,
+  }));
+}
+
 export async function startExport(): Promise<void> {
   const state = store.get();
   if (!state.videoFile) return;
@@ -181,7 +312,7 @@ export async function startExport(): Promise<void> {
 }
 
 function startMp4Export(videoFile: File): void {
-  const { sceneConfig, cropRect, zoomLevel, videoCenter } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = store.get();
   if (!encodeWorker) return;
 
   encodeWorker.onmessage = async (e) => {
@@ -202,11 +333,11 @@ function startMp4Export(videoFile: File): void {
     }
   };
 
-  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoCenter });
+  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes });
 }
 
 async function startWebmExport(videoFile: File): Promise<void> {
-  const { sceneConfig, cropRect, zoomLevel, videoCenter } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = store.get();
   if (!encodeWorker) return;
   const worker = encodeWorker;
 
@@ -235,7 +366,7 @@ async function startWebmExport(videoFile: File): Promise<void> {
   // The loop breaks early once targetSec >= actual duration anyway.
   const estimatedFrames = Math.ceil((videoFile.size / 50_000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames });
+  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames, keyframes });
   await waitForWebmAck();
 
   if (encodeWorker === null) return;

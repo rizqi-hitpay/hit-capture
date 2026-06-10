@@ -190,6 +190,18 @@ export interface VideoCenter {
   y: number;
 }
 
+// ─── Keyframe ─────────────────────────────────────────────────────────────────
+
+export interface Keyframe {
+  id: string;
+  /** seconds from video start */
+  time: number;
+  containerRect: CropRect;
+  videoCenter: VideoCenter;
+  /** content zoom multiplier: 1.0 = normal, 2.0 = 2× magnified */
+  zoom: number;
+}
+
 // ─── Editor state ─────────────────────────────────────────────────────────────
 
 export type EditorPhase =
@@ -198,6 +210,8 @@ export type EditorPhase =
   | 'processing'
   | 'ready'
   | 'exporting';
+
+export type EditorMode = 'animate' | 'preview';
 
 export interface EditorState {
   phase: EditorPhase;
@@ -215,6 +229,9 @@ export interface EditorState {
   zoomLevel: number;
   videoCenter: VideoCenter;
   editContainerMode: boolean;
+  keyframes: Keyframe[];
+  selectedKeyframeId: string | null;
+  editorMode: EditorMode;
 }
 
 // ─── Worker messages ──────────────────────────────────────────────────────────
@@ -231,8 +248,8 @@ export type PipelineWorkerOut =
   | { type: 'ERROR'; message: string };
 
 export type EncodeWorkerIn =
-  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter }
-  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; estimatedFrames: number }
+  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; keyframes: Keyframe[] }
+  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; estimatedFrames: number; keyframes: Keyframe[] }
   | { type: 'WEBM_FRAME'; frame: VideoFrame }
   | { type: 'END_WEBM_ENCODE' };
 

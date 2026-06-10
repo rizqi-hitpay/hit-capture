@@ -163,9 +163,9 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 24px;
-  padding-bottom: 80px; /* room for fixed playback bar */
+  padding-bottom: 0;
   overflow: hidden;
   background: var(--bg);
 }
@@ -175,8 +175,12 @@ html, body {
   flex-direction: column;
   gap: 12px;
   align-items: center;
+  justify-content: center;
   max-width: 100%;
-  max-height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 16px;
 }
 
 .preview-container {
@@ -207,50 +211,121 @@ html, body {
   gap: 16px;
 }
 
-/* Playback controls — fixed to bottom of preview column */
-.playback-controls {
-  position: fixed;
-  bottom: 20px;
-  /* Center within the preview column (right of sidebar) */
-  left: calc(var(--sidebar-w) + (100vw - var(--sidebar-w)) / 2);
-  transform: translateX(-50%);
-  z-index: 20;
+/* ─── Mode toggle ──────────────────────────────────────────────── */
+.mode-toggle {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  background: rgba(24, 24, 40, 0.92);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 14px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
-}
-
-.btn-play {
   background: var(--bg-3);
   border: 1px solid var(--border);
-  color: var(--text);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mode-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.mode-btn:hover:not(.mode-btn--active) { color: var(--text-2); }
+.mode-btn--active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ctrl-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+/* ─── Timeline control bar buttons ────────────────────────────── */
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ctrl-spacer { flex: 1; }
+
+.btn-ctrl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  height: 28px;
+  min-width: 28px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 6px;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: background 0.15s;
-}
-.btn-play:hover { background: var(--border); }
-
-.scrubber {
-  width: 340px;
-  height: 4px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.time-display {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.btn-ctrl:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--border);
+  color: var(--text);
+}
+.btn-ctrl:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-ctrl--play {
+  background: var(--bg-3);
+  border-color: var(--border);
+  color: var(--text);
+  width: 34px;
+  padding: 0;
+  font-size: 13px;
+}
+.btn-ctrl--play:hover:not(:disabled) { background: var(--border); }
+
+.btn-ctrl--accent {
+  background: rgba(99,102,241,0.12);
+  border-color: rgba(99,102,241,0.35);
+  color: #a5b4fc;
+}
+.btn-ctrl--accent:hover:not(:disabled) {
+  background: rgba(99,102,241,0.22);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn-ctrl--danger {
+  color: #f87171;
+}
+.btn-ctrl--danger:hover:not(:disabled) {
+  background: rgba(229,62,62,0.12);
+  border-color: rgba(229,62,62,0.4);
+  color: var(--danger);
+}
+
+.btn-ctrl--active {
+  background: rgba(99,102,241,0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tl-time {
+  font-size: 11px;
+  color: var(--text-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  padding: 0 8px;
+  letter-spacing: 0.02em;
 }
 
 /* ─── Control panel ────────────────────────────────────────────── */
@@ -470,6 +545,109 @@ html, body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .processing-overlay p { color: var(--text-2); font-size: 14px; }
+
+/* ─── Timeline ─────────────────────────────────────────────────── */
+.timeline-container {
+  width: 100%;
+  flex-shrink: 0;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.timeline-ruler {
+  position: relative;
+  height: 40px;
+  background: var(--bg-3);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.timeline-ruler:hover { background: #1c1c2e; }
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+  transform: translateX(-50%);
+}
+
+.timeline-playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--accent);
+}
+
+.kf-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: #facc15;
+  border: 1.5px solid #92400e;
+  border-radius: 2px;
+  cursor: grab;
+  z-index: 2;
+  transition: background 0.1s;
+}
+
+.kf-marker:hover { background: #fde047; }
+.kf-marker--selected {
+  background: var(--accent);
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.4);
+}
+
+.tl-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 8px;
+  background: var(--border);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.tl-tick--major {
+  height: 14px;
+  background: var(--text-3);
+}
+
+.tl-tick-label {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--text-3);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  min-height: 42px;
+}
 
 /* ─── Error banner ─────────────────────────────────────────────── */
 .error-banner {

@@ -2,6 +2,7 @@ import {
   store,
   updateSceneConfig,
   setEditContainerMode,
+  updateKeyframe,
 } from '../state/editorStore';
 import type { EditorState, GradientPresetId } from '../../types';
 import { GRADIENT_IDS, GRADIENT_PRESETS } from '../../renderer/gradientPresets';
@@ -49,6 +50,19 @@ export class ControlPanel {
           <p class="panel-hint" id="container-hint">Drag container to reposition on canvas</p>
         </section>
 
+        <!-- Selected Keyframe -->
+        <section class="panel-section" id="kf-section">
+          <h3 class="panel-heading">Keyframe</h3>
+          <p class="panel-hint" id="kf-section-hint">Select a keyframe on the timeline to edit</p>
+          <div id="kf-editor" style="display:none">
+            <div class="control-row" style="margin-top:6px">
+              <label class="control-label">Zoom</label>
+              <span class="control-value" id="kf-zoom-val">1.0×</span>
+            </div>
+            <input type="range" id="kf-zoom-slider" class="slider" min="1" max="4" step="0.05" value="1" />
+          </div>
+        </section>
+
       </div>
     `;
 
@@ -86,6 +100,16 @@ export class ControlPanel {
     btnEdit.addEventListener('click', () => {
       setEditContainerMode(!store.get().editContainerMode);
     });
+
+    // Keyframe zoom slider
+    const zoomSlider = this.el.querySelector('#kf-zoom-slider') as HTMLInputElement;
+    zoomSlider.addEventListener('input', () => {
+      const { selectedKeyframeId } = store.get();
+      if (!selectedKeyframeId) return;
+      const val = parseFloat(zoomSlider.value);
+      (this.el.querySelector('#kf-zoom-val') as HTMLElement).textContent = `${val.toFixed(2)}×`;
+      updateKeyframe(selectedKeyframeId, { zoom: val });
+    });
   }
 
   private update(state: EditorState): void {
@@ -113,6 +137,28 @@ export class ControlPanel {
       hint.textContent = state.editContainerMode
         ? 'Drag container to reveal different parts of the video'
         : 'Drag container to reposition on canvas';
+    }
+
+    // Keyframe section — hide entirely in preview mode
+    const kfSection = this.el.querySelector('#kf-section') as HTMLElement | null;
+    if (kfSection) kfSection.style.display = state.editorMode === 'preview' ? 'none' : '';
+
+    const kfHint   = this.el.querySelector('#kf-section-hint') as HTMLElement | null;
+    const kfEditor = this.el.querySelector('#kf-editor') as HTMLElement | null;
+    const zoomSlider = this.el.querySelector('#kf-zoom-slider') as HTMLInputElement | null;
+    const zoomVal  = this.el.querySelector('#kf-zoom-val') as HTMLElement | null;
+
+    if (state.selectedKeyframeId) {
+      const kf = state.keyframes.find((k) => k.id === state.selectedKeyframeId);
+      if (kf && kfHint && kfEditor && zoomSlider && zoomVal) {
+        kfHint.style.display  = 'none';
+        kfEditor.style.display = 'block';
+        zoomSlider.value = String(kf.zoom);
+        zoomVal.textContent  = `${kf.zoom.toFixed(2)}×`;
+      }
+    } else {
+      if (kfHint)   kfHint.style.display   = 'block';
+      if (kfEditor) kfEditor.style.display = 'none';
     }
   }
 }

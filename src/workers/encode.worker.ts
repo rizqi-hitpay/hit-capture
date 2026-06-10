@@ -11,7 +11,9 @@ import type {
   SceneConfig,
   CropRect,
   VideoCenter,
+  Keyframe,
 } from '../types';
+import { getStateAtTime } from '../editor/utils/keyframeInterpolation';
 import type { MuxerSetup } from '../encoder/mp4Muxer';
 import type { EncoderSetupResult } from '../encoder/webcodecs';
 import { demuxMP4 } from '../encoder/frameSource';
@@ -27,6 +29,7 @@ interface WebmEncodeState {
   cropRect: CropRect | null;
   zoomLevel: number;
   videoCenter: VideoCenter;
+  keyframes: Keyframe[];
   canvas: OffscreenCanvas;
   ctx: OffscreenCanvasRenderingContext2D;
   renderer: SceneRenderer;
@@ -56,9 +59,9 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   const msg = e.data;
 
   if (msg.type === 'START_ENCODE') {
-    const { videoFile, sceneConfig, cropRect, zoomLevel, videoCenter } = msg;
+    const { videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = msg;
     try {
-      await encode(videoFile, sceneConfig, cropRect, zoomLevel, videoCenter);
+      await encode(videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes);
     } catch (err) {
       self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     }
@@ -66,7 +69,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   }
 
   if (msg.type === 'INIT_WEBM_ENCODE') {
-    const { sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames } = msg;
+    const { sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames, keyframes } = msg;
     const { outputWidth: W, outputHeight: H } = sceneConfig;
     try {
       const canvas = new OffscreenCanvas(W, H);
@@ -84,7 +87,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
       muxerSetup = createMuxer(encoderSetup.codec, W, H);
 
       webmState = {
-        sceneConfig, cropRect, zoomLevel, videoCenter,
+        sceneConfig, cropRect, zoomLevel, videoCenter, keyframes,
         canvas, ctx, renderer,
         muxerSetup, encoderSetup,
         frameCount: 0, estimatedFrames,
@@ -100,11 +103,17 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   if (msg.type === 'WEBM_FRAME') {
     if (!webmState) return;
     const { frame } = msg;
-    const { sceneConfig, cropRect, zoomLevel, videoCenter, canvas, ctx, renderer, encoderSetup } = webmState;
+    const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes, canvas, ctx, renderer, encoderSetup } = webmState;
     const timestampUs = frame.timestamp;
     const timestampMs = timestampUs / 1000;
+    const timestampSec = timestampMs / 1000;
 
-    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, cropRect, zoomLevel, videoCenter);
+    const interp = getStateAtTime(keyframes, timestampSec);
+    const renderCropRect   = interp?.containerRect  ?? cropRect;
+    const renderVideoCenter = interp?.videoCenter   ?? videoCenter;
+    const renderZoom       = interp?.zoom           ?? 1.0;
+
+    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, renderCropRect, zoomLevel, renderVideoCenter, renderZoom);
 
     const outputFrame = new VideoFrame(canvas, {
       timestamp: timestampUs,
@@ -152,6 +161,7 @@ async function encode(
   cropRect: CropRect | null,
   zoomLevel: number,
   videoCenter: VideoCenter,
+  keyframes: Keyframe[],
 ): Promise<void> {
   const { outputWidth: W, outputHeight: H } = sceneConfig;
 
@@ -183,7 +193,13 @@ async function encode(
     const timestampMs = timestampUs / 1000;
 
     try {
-      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, cropRect, zoomLevel, videoCenter);
+      const timestampSec = timestampMs / 1000;
+      const interp = getStateAtTime(keyframes, timestampSec);
+      const renderCropRect    = interp?.containerRect  ?? cropRect;
+      const renderVideoCenter = interp?.videoCenter    ?? videoCenter;
+      const renderZoom        = interp?.zoom           ?? 1.0;
+
+      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, renderCropRect, zoomLevel, renderVideoCenter, renderZoom);
 
       const outputFrame = new VideoFrame(canvas, {
         timestamp: timestampUs,

@@ -1,7 +1,9 @@
-import { store, setCropRect, setVideoCenter } from '../state/editorStore';
+import { store, setCropRect, setVideoCenter, updateKeyframe, selectKeyframe } from '../state/editorStore';
 import type { EditorState, CropRect } from '../../types';
 import { SceneRenderer } from '../../renderer/sceneRenderer';
 import { PREVIEW_SCALE } from '../../shared/constants';
+import { getStateAtTime } from '../utils/keyframeInterpolation';
+import type { Timeline } from './Timeline';
 
 // ─── Container interaction types ─────────────────────────────────────────────
 
@@ -102,17 +104,17 @@ export class PreviewCanvas {
   private rafId: number | null = null;
   private unsub: (() => void) | null = null;
   private playing = false;
+  private playPromise: Promise<void> | null = null;
   private imode: InteractionMode = { kind: 'idle' };
+  private timeline: Timeline | null = null;
+  // For WebM files where video.duration === Infinity, we track the furthest
+  // time we've seen so the timeline has something to render against.
+  private effectiveDuration = 0;
 
   constructor(container: HTMLElement) {
     container.innerHTML = `
       <div class="preview-area">
         <canvas id="preview-canvas" class="preview-canvas"></canvas>
-        <div class="playback-controls">
-          <button class="btn-play" id="btn-play">▶</button>
-          <input type="range" id="scrubber" class="scrubber" min="0" max="100" value="0" step="0.1" />
-          <span class="time-display" id="time-display">0:00 / 0:00</span>
-        </div>
       </div>
     `;
 
@@ -129,7 +131,20 @@ export class PreviewCanvas {
       'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(this.video);
 
-    this.attachPlaybackControls(container);
+    this.video.addEventListener('ended', () => { this.playing = false; });
+
+    // WebM files from MediaRecorder have duration === Infinity. Track the
+    // furthest currentTime we observe so getDuration() has a real value.
+    const updateEffectiveDuration = () => {
+      const t = this.video.currentTime;
+      if (t > this.effectiveDuration) {
+        this.effectiveDuration = t;
+        this.timeline?.syncPlayhead(t);
+      }
+    };
+    this.video.addEventListener('timeupdate', updateEffectiveDuration);
+    this.video.addEventListener('seeked',     updateEffectiveDuration);
+
     this.attachContainerListeners();
     this.unsub = store.subscribe((state) => this.onStateChange(state));
   }
@@ -143,6 +158,39 @@ export class PreviewCanvas {
     this.video.remove();
   }
 
+  public getCurrentTime(): number { return this.video.currentTime; }
+  public getDuration(): number {
+    if (isFinite(this.video.duration) && this.video.duration > 0) return this.video.duration;
+    return this.effectiveDuration;
+  }
+  public seekTo(t: number): void { this.video.currentTime = t; }
+  public isPlaying(): boolean { return this.playing; }
+  public isLooping(): boolean { return this.video.loop; }
+  public goToStart(): void { this.video.currentTime = 0; }
+  public goToEnd(): void { const d = this.getDuration(); if (d > 0) this.video.currentTime = d; }
+
+  public async togglePlay(): Promise<void> {
+    if (this.playing) {
+      if (this.playPromise) await this.playPromise.catch(() => {});
+      this.video.pause();
+      this.playing = false;
+    } else {
+      this.playPromise = this.video.play();
+      this.playing = true;
+      try {
+        await this.playPromise;
+      } catch (err) {
+        console.error('[PreviewCanvas] play() failed:', (err as Error)?.name, (err as Error)?.message);
+        this.playing = false;
+      } finally {
+        this.playPromise = null;
+      }
+    }
+  }
+
+  public toggleLoop(): void { this.video.loop = !this.video.loop; }
+  public setTimeline(t: Timeline): void { this.timeline = t; }
+
   private onStateChange(state: EditorState): void {
     if (state.videoFile && this.video.src === '') {
       this.video.src = URL.createObjectURL(state.videoFile);
@@ -150,6 +198,29 @@ export class PreviewCanvas {
       this.video.addEventListener('error', () => {
         const e = this.video.error;
         console.error('[PreviewCanvas] Video load error:', e?.code, e?.message);
+      }, { once: true });
+      // Once metadata is available, probe the real duration.
+      // For WebM files video.duration === Infinity even after loadedmetadata,
+      // so we seek to a huge value; the browser clamps to the true end and the
+      // seeked event reveals the actual duration. Then we jump back to 0.
+      this.video.addEventListener('loadedmetadata', () => {
+        if (isFinite(this.video.duration) && this.video.duration > 0) {
+          this.effectiveDuration = this.video.duration;
+          this.timeline?.syncPlayhead(0);
+        } else {
+          // WebM: seek to end to discover real duration
+          let probing = true;
+          const onSeeked = () => {
+            if (!probing) return;
+            probing = false;
+            this.effectiveDuration = this.video.currentTime;
+            this.video.removeEventListener('seeked', onSeeked);
+            this.video.currentTime = 0;
+            this.timeline?.syncPlayhead(0);
+          };
+          this.video.addEventListener('seeked', onSeeked);
+          this.video.currentTime = 1e9;
+        }
       }, { once: true });
     }
 
@@ -186,9 +257,29 @@ export class PreviewCanvas {
     const state = store.get();
     if (state.phase !== 'ready') return;
 
+    const t = this.video.currentTime;
+    let { cropRect, videoCenter, zoomLevel } = state;
+    let zoom = 1.0;
+
+    const useInterpolation =
+      state.keyframes.length > 0 &&
+      (state.editorMode === 'preview' || state.selectedKeyframeId === null);
+
+    if (useInterpolation) {
+      const interp = getStateAtTime(state.keyframes, t);
+      if (interp) {
+        cropRect    = interp.containerRect;
+        videoCenter = interp.videoCenter;
+        zoom        = interp.zoom;
+      }
+    } else if (state.selectedKeyframeId !== null) {
+      const kf = state.keyframes.find((k) => k.id === state.selectedKeyframeId);
+      zoom = kf ? kf.zoom : zoomLevel;
+    }
+
     const previewW = this.canvas.width;
     const previewH = this.canvas.height;
-    const { sceneConfig, cropRect, zoomLevel } = state;
+    const { sceneConfig } = state;
 
     const previewConfig = {
       ...sceneConfig,
@@ -208,17 +299,19 @@ export class PreviewCanvas {
       { videoSource: this.video, cursorX: 0, cursorY: 0, isClick: false, clickProgress: 0, camera: { scale: 1, tx: 0, ty: 0 }, t: 0 },
       previewConfig,
       cropRect,
-      zoomLevel,
-      state.videoCenter,
+      1.0,
+      videoCenter,
+      zoom,
     );
 
     this.drawContainerOverlay();
-    this.updateTimeDisplay();
+    this.timeline?.syncPlayhead(t);
   }
 
   // ─── Container overlay ───────────────────────────────────────────────────────
 
   private drawContainerOverlay(): void {
+    if (store.get().editorMode === 'preview') return;
     if (this.imode.kind === 'drawing') {
       this.drawDrawingOverlay();
       return;
@@ -243,15 +336,17 @@ export class PreviewCanvas {
     this.ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     this.ctx.setLineDash([]);
 
-    // 8 resize handles — white fill, indigo border
-    const hs = HANDLE_SIZE;
-    const centers = handleCenters({ x, y, w, h });
-    for (const { cx, cy } of Object.values(centers)) {
-      this.ctx.fillStyle = '#fff';
-      this.ctx.strokeStyle = '#6366f1';
-      this.ctx.lineWidth = 1.5;
-      this.ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
-      this.ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+    // Resize handles — only shown when Edit Container mode is active
+    if (store.get().editContainerMode) {
+      const hs = HANDLE_SIZE;
+      const centers = handleCenters({ x, y, w, h });
+      for (const { cx, cy } of Object.values(centers)) {
+        this.ctx.fillStyle = '#fff';
+        this.ctx.strokeStyle = '#6366f1';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+        this.ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+      }
     }
 
     this.ctx.restore();
@@ -289,19 +384,20 @@ export class PreviewCanvas {
 
   private attachContainerListeners(): void {
     this.canvas.addEventListener('mousedown', (e) => {
-      if (store.get().phase !== 'ready') return;
+      const st = store.get();
+      if (st.phase !== 'ready' || st.editorMode === 'preview') return;
       const pos = this.canvasPos(e);
       const container = this.containerPx();
 
       if (container) {
         const hit = hitTestContainer(pos.x, pos.y, container);
-        if (hit.zone === 'handle') {
+        if (hit.zone === 'handle' && st.editContainerMode) {
           const origRect = store.get().cropRect!;
           this.imode = { kind: 'resizing', handle: hit.id, startX: pos.x, startY: pos.y, origRect };
           e.preventDefault();
           return;
         }
-        if (hit.zone === 'body') {
+        if (hit.zone === 'body' || (hit.zone === 'handle' && !st.editContainerMode)) {
           const { cropRect, videoCenter } = store.get();
           this.imode = {
             kind: 'moving',
@@ -315,21 +411,26 @@ export class PreviewCanvas {
         }
       }
 
-      // Click on background → start drawing new container
+      // Click on background → deselect keyframe, start drawing new container
+      selectKeyframe(null);
       this.imode = { kind: 'drawing', startX: pos.x, startY: pos.y, curX: pos.x, curY: pos.y };
       e.preventDefault();
     });
 
     this.canvas.addEventListener('mousemove', (e) => {
+      if (store.get().editorMode === 'preview') {
+        this.canvas.style.cursor = 'default';
+        return;
+      }
       const pos = this.canvasPos(e);
 
       if (this.imode.kind === 'idle') {
         const container = this.containerPx();
         if (container) {
           const hit = hitTestContainer(pos.x, pos.y, container);
-          if (hit.zone === 'handle') {
+          if (hit.zone === 'handle' && store.get().editContainerMode) {
             this.canvas.style.cursor = HANDLE_CURSORS[hit.id];
-          } else if (hit.zone === 'body') {
+          } else if (hit.zone === 'body' || hit.zone === 'handle') {
             this.canvas.style.cursor = 'move';
           } else {
             this.canvas.style.cursor = 'crosshair';
@@ -355,19 +456,31 @@ export class PreviewCanvas {
           y: clamp(origRect.y + dy, 0, 1 - origRect.h),
         };
         setCropRect(newRect);
+        const { selectedKeyframeId } = store.get();
+        if (selectedKeyframeId) {
+          updateKeyframe(selectedKeyframeId, { containerRect: newRect });
+        }
         if (!store.get().editContainerMode) {
-          // Non-edit mode: move video center by same delta → same video content stays visible
-          setVideoCenter({
+          const newCenter = {
             x: origVideoCenter.x + dx,
             y: origVideoCenter.y + dy,
-          });
+          };
+          setVideoCenter(newCenter);
+          if (selectedKeyframeId) {
+            updateKeyframe(selectedKeyframeId, { videoCenter: newCenter });
+          }
         }
         return;
       }
 
       if (this.imode.kind === 'resizing') {
         const { handle, startX, startY, origRect } = this.imode;
-        setCropRect(applyResize(origRect, handle, startX, startY, pos.x, pos.y, this.canvas.width, this.canvas.height));
+        const newRect = applyResize(origRect, handle, startX, startY, pos.x, pos.y, this.canvas.width, this.canvas.height);
+        setCropRect(newRect);
+        const { selectedKeyframeId } = store.get();
+        if (selectedKeyframeId) {
+          updateKeyframe(selectedKeyframeId, { containerRect: newRect });
+        }
         return;
       }
     });
@@ -420,61 +533,4 @@ export class PreviewCanvas {
     };
   }
 
-  // ─── Playback controls ───────────────────────────────────────────────────────
-
-  private attachPlaybackControls(container: HTMLElement): void {
-    const playBtn = container.querySelector('#btn-play') as HTMLButtonElement;
-    const scrubber = container.querySelector('#scrubber') as HTMLInputElement;
-
-    let playPromise: Promise<void> | null = null;
-
-    playBtn.addEventListener('click', async () => {
-      if (this.playing) {
-        if (playPromise) await playPromise.catch(() => {});
-        this.video.pause();
-        this.playing = false;
-        playBtn.textContent = '▶';
-      } else {
-        playPromise = this.video.play();
-        this.playing = true;
-        playBtn.textContent = '⏸';
-        try {
-          await playPromise;
-        } catch (err) {
-          console.error('[PreviewCanvas] play() failed:', (err as Error)?.name, (err as Error)?.message);
-          this.playing = false;
-          playBtn.textContent = '▶';
-        } finally {
-          playPromise = null;
-        }
-      }
-    });
-
-    this.video.addEventListener('ended', () => {
-      this.playing = false;
-      playBtn.textContent = '▶';
-    });
-
-    scrubber.addEventListener('input', () => {
-      const dur = isFinite(this.video.duration) ? this.video.duration : 0;
-      if (dur > 0) this.video.currentTime = dur * (parseFloat(scrubber.value) / 100);
-    });
-
-    this.video.addEventListener('timeupdate', () => {
-      const dur = isFinite(this.video.duration) ? this.video.duration : 0;
-      if (dur > 0) scrubber.value = String((this.video.currentTime / dur) * 100);
-    });
-  }
-
-  private updateTimeDisplay(): void {
-    const el = document.getElementById('time-display');
-    if (!el) return;
-    const fmt = (s: number) => {
-      if (!isFinite(s) || isNaN(s)) return '?:??';
-      const m = Math.floor(s / 60);
-      return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-    };
-    const dur = isFinite(this.video.duration) ? this.video.duration : 0;
-    el.textContent = `${fmt(this.video.currentTime)} / ${fmt(dur)}`;
-  }
 }

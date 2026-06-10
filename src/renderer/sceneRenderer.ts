@@ -30,10 +30,11 @@ export class SceneRenderer {
     cropRect: CropRect | null = null,
     zoomLevel = 1.0,
     videoCenter: VideoCenter = { x: 0.5, y: 0.5 },
+    zoom = 1.0,
   ): void {
     const { outputWidth: W, outputHeight: H } = config;
     this.drawBackground(ctx, config, W, H);
-    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel, videoCenter);
+    this.drawFloatingWindow(ctx, frame, config, W, H, cropRect, zoomLevel, videoCenter, zoom);
   }
 
   private drawBackground(ctx: AnyCtx, config: SceneConfig, W: number, H: number): void {
@@ -60,6 +61,7 @@ export class SceneRenderer {
     cropRect: CropRect | null,
     zoomLevel: number,
     videoCenter: VideoCenter,
+    zoom: number,
   ): void {
     const { paddingPx, cornerRadiusPx, shadowBlur, shadowAlpha } = config.window;
 
@@ -130,7 +132,7 @@ export class SceneRenderer {
         // acts as a viewport mask — only the portion under the container is
         // visible. Moving the container reveals different parts of the video
         // without affecting its scale.
-        const scale   = Math.max(W / natW, H / natH);
+        const scale   = Math.max(W / natW, H / natH) * zoom;
         const scaledW = natW * scale;
         const scaledH = natH * scale;
         const videoX  = videoCenter.x * W - scaledW / 2;
