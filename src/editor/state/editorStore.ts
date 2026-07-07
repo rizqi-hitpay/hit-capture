@@ -9,9 +9,10 @@ import type {
   SceneConfig,
   CropRect,
   VideoCenter,
+  Skew,
   Keyframe,
 } from '../../types';
-import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CONTAINER_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_CENTER, DEFAULT_KEYFRAMES, DEFAULT_SELECTED_KEYFRAME_ID, DEFAULT_EDITOR_MODE } from './defaults';
+import { DEFAULT_PIPELINE_PARAMS, DEFAULT_SCENE_CONFIG, DEFAULT_CONTAINER_RECT, DEFAULT_ZOOM_LEVEL, DEFAULT_VIDEO_CENTER, DEFAULT_SKEW, DEFAULT_KEYFRAMES, DEFAULT_SELECTED_KEYFRAME_ID, DEFAULT_EDITOR_MODE } from './defaults';
 import { getStateAtTime } from '../utils/keyframeInterpolation';
 import { identityTransform } from '../../shared/coords';
 import { DEFAULT_OUTPUT_FRAMERATE } from '../../shared/constants';
@@ -61,6 +62,7 @@ const INITIAL: EditorState = {
   cropRect: DEFAULT_CONTAINER_RECT,
   zoomLevel: DEFAULT_ZOOM_LEVEL,
   videoCenter: DEFAULT_VIDEO_CENTER,
+  skew: DEFAULT_SKEW,
   editContainerMode: false,
   keyframes: DEFAULT_KEYFRAMES,
   selectedKeyframeId: DEFAULT_SELECTED_KEYFRAME_ID,
@@ -107,12 +109,14 @@ function probeVideoDimensions(file: File): void {
       },
       cropRect: DEFAULT_CONTAINER_RECT,
       videoCenter: DEFAULT_VIDEO_CENTER,
+      skew: DEFAULT_SKEW,
       editContainerMode: false,
       keyframes: DEFAULT_KEYFRAMES,
       selectedKeyframeId: DEFAULT_SELECTED_KEYFRAME_ID,
       editorMode: DEFAULT_EDITOR_MODE,
       phase: 'ready',
     }));
+    clearHistory();
     URL.revokeObjectURL(video.src);
   };
   video.onerror = () => {
@@ -154,6 +158,10 @@ export function setVideoCenter(center: VideoCenter): void {
   store.set((prev) => ({ ...prev, videoCenter: center }));
 }
 
+export function setSkew(skew: Skew): void {
+  store.set((prev) => ({ ...prev, skew }));
+}
+
 export function setEditContainerMode(active: boolean): void {
   store.set((prev) => ({ ...prev, editContainerMode: active }));
 }
@@ -167,42 +175,86 @@ export function setEditorMode(mode: EditorMode): void {
   }));
 }
 
-// ─── Undo history ─────────────────────────────────────────────────────────────
+// ─── Undo / redo history ──────────────────────────────────────────────────────
+// Snapshots cover the visual "document": container rect, video pan, zoom,
+// keyframes, and scene config. Callers commit BEFORE mutating — once per
+// gesture (drag start), not per mousemove — so a drag undoes as one step.
 
-interface HistoryEntry {
+interface Snapshot {
+  cropRect: CropRect | null;
+  zoomLevel: number;
+  videoCenter: VideoCenter;
+  skew: Skew;
   keyframes: Keyframe[];
   selectedKeyframeId: string | null;
+  sceneConfig: SceneConfig;
 }
 
-const kfHistory: HistoryEntry[] = [];
-const MAX_HISTORY = 50;
+const undoStack: Snapshot[] = [];
+const redoStack: Snapshot[] = [];
+const MAX_HISTORY = 100;
 
-function pushHistory(): void {
-  const { keyframes, selectedKeyframeId } = store.get();
-  kfHistory.push({ keyframes: keyframes.map((kf) => ({ ...kf })), selectedKeyframeId });
-  if (kfHistory.length > MAX_HISTORY) kfHistory.shift();
+function takeSnapshot(): Snapshot {
+  const s = store.get();
+  return {
+    cropRect: s.cropRect ? { ...s.cropRect } : null,
+    zoomLevel: s.zoomLevel,
+    videoCenter: { ...s.videoCenter },
+    skew: { ...s.skew },
+    keyframes: s.keyframes.map((kf) => ({
+      ...kf,
+      containerRect: { ...kf.containerRect },
+      videoCenter: { ...kf.videoCenter },
+      skew: kf.skew ? { ...kf.skew } : undefined,
+    })),
+    selectedKeyframeId: s.selectedKeyframeId,
+    sceneConfig: { ...s.sceneConfig, window: { ...s.sceneConfig.window } },
+  };
 }
 
-export function undoKeyframe(): void {
-  const entry = kfHistory.pop();
-  if (entry) {
-    store.set((prev) => ({ ...prev, keyframes: entry.keyframes, selectedKeyframeId: entry.selectedKeyframeId }));
-  }
+function applySnapshot(snap: Snapshot): void {
+  store.set((prev) => ({ ...prev, ...snap }));
 }
 
-export function canUndoKeyframe(): boolean {
-  return kfHistory.length > 0;
+/** Record the current state as an undo point. Call BEFORE mutating. */
+export function commitHistory(): void {
+  undoStack.push(takeSnapshot());
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack.length = 0;
+}
+
+export function undo(): void {
+  const entry = undoStack.pop();
+  if (!entry) return;
+  redoStack.push(takeSnapshot());
+  applySnapshot(entry);
+}
+
+export function redo(): void {
+  const entry = redoStack.pop();
+  if (!entry) return;
+  undoStack.push(takeSnapshot());
+  applySnapshot(entry);
+}
+
+export function canUndo(): boolean { return undoStack.length > 0; }
+export function canRedo(): boolean { return redoStack.length > 0; }
+
+function clearHistory(): void {
+  undoStack.length = 0;
+  redoStack.length = 0;
 }
 
 // ─── Keyframe actions ─────────────────────────────────────────────────────────
 
 export function addKeyframe(time: number): void {
   const state = store.get();
-  const { keyframes, cropRect, videoCenter, zoomLevel, selectedKeyframeId } = state;
+  const { keyframes, cropRect, videoCenter, zoomLevel, skew, selectedKeyframeId } = state;
 
   let containerRect = cropRect ?? DEFAULT_CONTAINER_RECT;
   let vc = videoCenter;
   let zoom = zoomLevel;
+  let kfSkew = skew;
 
   if (keyframes.length > 0 && selectedKeyframeId === null) {
     const interp = getStateAtTime(keyframes, time);
@@ -210,12 +262,13 @@ export function addKeyframe(time: number): void {
       containerRect = interp.containerRect;
       vc = interp.videoCenter;
       zoom = interp.zoom;
+      kfSkew = interp.skew;
     }
   }
 
-  pushHistory();
+  commitHistory();
   const id = crypto.randomUUID();
-  const newKf: Keyframe = { id, time, containerRect, videoCenter: vc, zoom };
+  const newKf: Keyframe = { id, time, containerRect, videoCenter: vc, zoom, skew: kfSkew };
   const sorted = [...keyframes, newKf].sort((a, b) => a.time - b.time);
 
   store.set((prev) => ({
@@ -225,13 +278,14 @@ export function addKeyframe(time: number): void {
     cropRect: containerRect,
     videoCenter: vc,
     zoomLevel: zoom,
+    skew: kfSkew,
   }));
 }
 
 export function duplicateKeyframe(id: string, time: number): void {
   const src = store.get().keyframes.find((k) => k.id === id);
   if (!src) return;
-  pushHistory();
+  commitHistory();
   const newId = crypto.randomUUID();
   const newKf: Keyframe = { ...src, id: newId, time };
   const sorted = [...store.get().keyframes, newKf].sort((a, b) => a.time - b.time);
@@ -242,11 +296,11 @@ export function duplicateKeyframe(id: string, time: number): void {
     cropRect: src.containerRect,
     videoCenter: src.videoCenter,
     zoomLevel: src.zoom,
+    skew: src.skew ?? DEFAULT_SKEW,
   }));
 }
 
 export function updateKeyframe(id: string, partial: Partial<Omit<Keyframe, 'id'>>): void {
-  if (partial.time !== undefined) pushHistory();
   store.set((prev) => ({
     ...prev,
     keyframes: prev.keyframes
@@ -256,7 +310,7 @@ export function updateKeyframe(id: string, partial: Partial<Omit<Keyframe, 'id'>
 }
 
 export function deleteKeyframe(id: string): void {
-  pushHistory();
+  commitHistory();
   store.set((prev) => ({
     ...prev,
     keyframes: prev.keyframes.filter((kf) => kf.id !== id),
@@ -277,6 +331,7 @@ export function selectKeyframe(id: string | null): void {
     cropRect: kf.containerRect,
     videoCenter: kf.videoCenter,
     zoomLevel: kf.zoom,
+    skew: kf.skew ?? DEFAULT_SKEW,
   }));
 }
 
@@ -312,7 +367,7 @@ export async function startExport(): Promise<void> {
 }
 
 function startMp4Export(videoFile: File): void {
-  const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes } = store.get();
   if (!encodeWorker) return;
 
   encodeWorker.onmessage = async (e) => {
@@ -333,11 +388,11 @@ function startMp4Export(videoFile: File): void {
     }
   };
 
-  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes });
+  encodeWorker.postMessage({ type: 'START_ENCODE', videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes });
 }
 
 async function startWebmExport(videoFile: File): Promise<void> {
-  const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = store.get();
+  const { sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes } = store.get();
   if (!encodeWorker) return;
   const worker = encodeWorker;
 
@@ -366,7 +421,7 @@ async function startWebmExport(videoFile: File): Promise<void> {
   // The loop breaks early once targetSec >= actual duration anyway.
   const estimatedFrames = Math.ceil((videoFile.size / 50_000) * DEFAULT_OUTPUT_FRAMERATE);
 
-  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames, keyframes });
+  worker.postMessage({ type: 'INIT_WEBM_ENCODE', sceneConfig, cropRect, zoomLevel, videoCenter, skew, estimatedFrames, keyframes });
   await waitForWebmAck();
 
   if (encodeWorker === null) return;

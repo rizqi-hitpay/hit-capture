@@ -1,11 +1,14 @@
-import type { Keyframe, CropRect, VideoCenter } from '../../types';
+import type { Keyframe, CropRect, VideoCenter, Skew } from '../../types';
 import { lerp } from '../../shared/coords';
 
 export interface InterpolatedState {
   containerRect: CropRect;
   videoCenter: VideoCenter;
   zoom: number;
+  skew: Skew;
 }
+
+const NO_SKEW: Skew = { x: 0, y: 0, z: 0, tiltX: 0, tiltY: 0 };
 
 /**
  * Interpolates keyframe state at time `t` (seconds).
@@ -19,12 +22,12 @@ export function getStateAtTime(keyframes: Keyframe[], t: number): InterpolatedSt
 
   if (t <= sorted[0].time) {
     const k = sorted[0];
-    return { containerRect: k.containerRect, videoCenter: k.videoCenter, zoom: k.zoom };
+    return { containerRect: k.containerRect, videoCenter: k.videoCenter, zoom: k.zoom, skew: k.skew ?? NO_SKEW };
   }
 
   const last = sorted[sorted.length - 1];
   if (t >= last.time) {
-    return { containerRect: last.containerRect, videoCenter: last.videoCenter, zoom: last.zoom };
+    return { containerRect: last.containerRect, videoCenter: last.videoCenter, zoom: last.zoom, skew: last.skew ?? NO_SKEW };
   }
 
   let a = sorted[0];
@@ -51,5 +54,12 @@ export function getStateAtTime(keyframes: Keyframe[], t: number): InterpolatedSt
       y: lerp(a.videoCenter.y, b.videoCenter.y, p),
     },
     zoom: lerp(a.zoom, b.zoom, p),
+    skew: {
+      x: lerp(a.skew?.x ?? 0, b.skew?.x ?? 0, p),
+      y: lerp(a.skew?.y ?? 0, b.skew?.y ?? 0, p),
+      z: lerp(a.skew?.z ?? 0, b.skew?.z ?? 0, p),
+      tiltX: lerp(a.skew?.tiltX ?? 0, b.skew?.tiltX ?? 0, p),
+      tiltY: lerp(a.skew?.tiltY ?? 0, b.skew?.tiltY ?? 0, p),
+    },
   };
 }

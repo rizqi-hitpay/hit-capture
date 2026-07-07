@@ -1,4 +1,4 @@
-import { store, setCropRect, setVideoCenter, updateKeyframe, selectKeyframe } from '../state/editorStore';
+import { store, setCropRect, setVideoCenter, setZoomLevel, updateKeyframe, selectKeyframe, commitHistory } from '../state/editorStore';
 import type { EditorState, CropRect } from '../../types';
 import { SceneRenderer } from '../../renderer/sceneRenderer';
 import { PREVIEW_SCALE } from '../../shared/constants';
@@ -14,6 +14,9 @@ type InteractionMode =
   | { kind: 'drawing'; startX: number; startY: number; curX: number; curY: number }
   | { kind: 'moving';  startX: number; startY: number; origRect: CropRect; origVideoCenter: { x: number; y: number } }
   | { kind: 'resizing'; handle: HandleId; startX: number; startY: number; origRect: CropRect };
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
 
 const HANDLE_SIZE = 8;   // px square side
 const HANDLE_HIT  = 12;  // px hit radius (generous for small handles)
@@ -106,6 +109,13 @@ export class PreviewCanvas {
   private playing = false;
   private playPromise: Promise<void> | null = null;
   private imode: InteractionMode = { kind: 'idle' };
+  // Deferred undo commit: armed on mousedown, fired on the first mousemove
+  // that actually mutates state — so a plain click doesn't pollute history
+  // and a full drag undoes as a single step.
+  private pendingHistory = false;
+  // Wheel-zoom gestures arrive as many discrete events; commit one undo entry
+  // per burst (>500ms gap starts a new entry).
+  private lastWheelTs = 0;
   private timeline: Timeline | null = null;
   // For WebM files where video.duration === Infinity, we track the furthest
   // time we've seen so the timeline has something to render against.
@@ -258,8 +268,10 @@ export class PreviewCanvas {
     if (state.phase !== 'ready') return;
 
     const t = this.video.currentTime;
-    let { cropRect, videoCenter, zoomLevel } = state;
-    let zoom = 1.0;
+    let { cropRect, videoCenter, zoomLevel, skew } = state;
+    // With no keyframes the live zoomLevel drives the view directly (wheel
+    // zoom before any keyframe exists); once keyframes exist they own zoom.
+    let zoom = state.keyframes.length === 0 ? zoomLevel : 1.0;
 
     const useInterpolation =
       state.keyframes.length > 0 &&
@@ -271,10 +283,12 @@ export class PreviewCanvas {
         cropRect    = interp.containerRect;
         videoCenter = interp.videoCenter;
         zoom        = interp.zoom;
+        skew        = interp.skew;
       }
     } else if (state.selectedKeyframeId !== null) {
       const kf = state.keyframes.find((k) => k.id === state.selectedKeyframeId);
       zoom = kf ? kf.zoom : zoomLevel;
+      skew = kf ? (kf.skew ?? { x: 0, y: 0, z: 0, tiltX: 0, tiltY: 0 }) : skew;
     }
 
     const previewW = this.canvas.width;
@@ -302,6 +316,7 @@ export class PreviewCanvas {
       1.0,
       videoCenter,
       zoom,
+      skew,
     );
 
     this.drawContainerOverlay();
@@ -394,6 +409,7 @@ export class PreviewCanvas {
         if (hit.zone === 'handle' && st.editContainerMode) {
           const origRect = store.get().cropRect!;
           this.imode = { kind: 'resizing', handle: hit.id, startX: pos.x, startY: pos.y, origRect };
+          this.pendingHistory = true;
           e.preventDefault();
           return;
         }
@@ -406,6 +422,7 @@ export class PreviewCanvas {
             origRect: cropRect!,
             origVideoCenter: { ...videoCenter },
           };
+          this.pendingHistory = true;
           e.preventDefault();
           return;
         }
@@ -447,20 +464,15 @@ export class PreviewCanvas {
       }
 
       if (this.imode.kind === 'moving') {
+        this.commitPendingHistory();
         const { startX, startY, origRect, origVideoCenter } = this.imode;
         const dx = (pos.x - startX) / this.canvas.width;
         const dy = (pos.y - startY) / this.canvas.height;
-        const newRect = {
-          ...origRect,
-          x: clamp(origRect.x + dx, 0, 1 - origRect.w),
-          y: clamp(origRect.y + dy, 0, 1 - origRect.h),
-        };
-        setCropRect(newRect);
-        const { selectedKeyframeId } = store.get();
-        if (selectedKeyframeId) {
-          updateKeyframe(selectedKeyframeId, { containerRect: newRect });
-        }
-        if (!store.get().editContainerMode) {
+        const { selectedKeyframeId, editContainerMode } = store.get();
+
+        if (editContainerMode) {
+          // Edit Container mode: container stays put — drag pans the video
+          // beneath it, revealing a different part of the recording.
           const newCenter = {
             x: origVideoCenter.x + dx,
             y: origVideoCenter.y + dy,
@@ -469,11 +481,32 @@ export class PreviewCanvas {
           if (selectedKeyframeId) {
             updateKeyframe(selectedKeyframeId, { videoCenter: newCenter });
           }
+          return;
+        }
+
+        // Normal mode: container and video move together across the canvas.
+        const newRect = {
+          ...origRect,
+          x: clamp(origRect.x + dx, 0, 1 - origRect.w),
+          y: clamp(origRect.y + dy, 0, 1 - origRect.h),
+        };
+        setCropRect(newRect);
+        if (selectedKeyframeId) {
+          updateKeyframe(selectedKeyframeId, { containerRect: newRect });
+        }
+        const newCenter = {
+          x: origVideoCenter.x + dx,
+          y: origVideoCenter.y + dy,
+        };
+        setVideoCenter(newCenter);
+        if (selectedKeyframeId) {
+          updateKeyframe(selectedKeyframeId, { videoCenter: newCenter });
         }
         return;
       }
 
       if (this.imode.kind === 'resizing') {
+        this.commitPendingHistory();
         const { handle, startX, startY, origRect } = this.imode;
         const newRect = applyResize(origRect, handle, startX, startY, pos.x, pos.y, this.canvas.width, this.canvas.height);
         setCropRect(newRect);
@@ -490,6 +523,7 @@ export class PreviewCanvas {
         this.commitDraw();
       }
       this.imode = { kind: 'idle' };
+      this.pendingHistory = false;
       this.canvas.style.cursor = 'crosshair';
     });
 
@@ -499,7 +533,55 @@ export class PreviewCanvas {
       }
       // moving/resizing: live state is already committed to store, nothing to do
       this.imode = { kind: 'idle' };
+      this.pendingHistory = false;
     });
+
+    // Wheel over the container in Edit Container mode → zoom the video,
+    // keeping the point under the cursor anchored.
+    this.canvas.addEventListener('wheel', (e) => {
+      const st = store.get();
+      if (st.phase !== 'ready' || st.editorMode === 'preview' || !st.editContainerMode) return;
+      const container = this.containerPx();
+      if (!container) return;
+      const pos = this.canvasPos(e);
+      if (hitTestContainer(pos.x, pos.y, container).zone === 'outside') return;
+      e.preventDefault();
+
+      const selectedKf = st.selectedKeyframeId
+        ? st.keyframes.find((k) => k.id === st.selectedKeyframeId)
+        : undefined;
+      const oldZoom = selectedKf ? selectedKf.zoom : st.zoomLevel;
+      const newZoom = clamp(oldZoom * Math.exp(-e.deltaY * 0.002), MIN_ZOOM, MAX_ZOOM);
+      if (newZoom === oldZoom) return;
+
+      const now = performance.now();
+      if (now - this.lastWheelTs > 500) commitHistory();
+      this.lastWheelTs = now;
+
+      // Keep the video point under the cursor fixed: offsets from the video
+      // center scale by k, so the center moves toward/away from the cursor.
+      const cx = pos.x / this.canvas.width;
+      const cy = pos.y / this.canvas.height;
+      const k  = newZoom / oldZoom;
+      const vc = st.videoCenter;
+      const newCenter = {
+        x: cx - (cx - vc.x) * k,
+        y: cy - (cy - vc.y) * k,
+      };
+
+      setZoomLevel(newZoom);
+      setVideoCenter(newCenter);
+      if (st.selectedKeyframeId) {
+        updateKeyframe(st.selectedKeyframeId, { zoom: newZoom, videoCenter: newCenter });
+      }
+    }, { passive: false });
+  }
+
+  private commitPendingHistory(): void {
+    if (this.pendingHistory) {
+      commitHistory();
+      this.pendingHistory = false;
+    }
   }
 
   private commitDraw(): void {
@@ -513,6 +595,7 @@ export class PreviewCanvas {
     const hPx = y1 - y0;
 
     if (wPx > MIN_DRAW_PX && hPx > MIN_DRAW_PX) {
+      commitHistory();
       setCropRect({
         x: clamp(x0 / this.canvas.width,  0, 1),
         y: clamp(y0 / this.canvas.height, 0, 1),

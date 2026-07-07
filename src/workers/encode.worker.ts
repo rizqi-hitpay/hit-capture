@@ -11,6 +11,7 @@ import type {
   SceneConfig,
   CropRect,
   VideoCenter,
+  Skew,
   Keyframe,
 } from '../types';
 import { getStateAtTime } from '../editor/utils/keyframeInterpolation';
@@ -29,6 +30,7 @@ interface WebmEncodeState {
   cropRect: CropRect | null;
   zoomLevel: number;
   videoCenter: VideoCenter;
+  skew: Skew;
   keyframes: Keyframe[];
   canvas: OffscreenCanvas;
   ctx: OffscreenCanvasRenderingContext2D;
@@ -59,9 +61,9 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   const msg = e.data;
 
   if (msg.type === 'START_ENCODE') {
-    const { videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes } = msg;
+    const { videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes } = msg;
     try {
-      await encode(videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, keyframes);
+      await encode(videoFile, sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes);
     } catch (err) {
       self.postMessage({ type: 'ERROR', message: err instanceof Error ? err.message : String(err) } as EncodeWorkerOut);
     }
@@ -69,7 +71,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   }
 
   if (msg.type === 'INIT_WEBM_ENCODE') {
-    const { sceneConfig, cropRect, zoomLevel, videoCenter, estimatedFrames, keyframes } = msg;
+    const { sceneConfig, cropRect, zoomLevel, videoCenter, skew, estimatedFrames, keyframes } = msg;
     const { outputWidth: W, outputHeight: H } = sceneConfig;
     try {
       const canvas = new OffscreenCanvas(W, H);
@@ -87,7 +89,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
       muxerSetup = createMuxer(encoderSetup.codec, W, H);
 
       webmState = {
-        sceneConfig, cropRect, zoomLevel, videoCenter, keyframes,
+        sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes,
         canvas, ctx, renderer,
         muxerSetup, encoderSetup,
         frameCount: 0, estimatedFrames,
@@ -103,7 +105,7 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
   if (msg.type === 'WEBM_FRAME') {
     if (!webmState) return;
     const { frame } = msg;
-    const { sceneConfig, cropRect, zoomLevel, videoCenter, keyframes, canvas, ctx, renderer, encoderSetup } = webmState;
+    const { sceneConfig, cropRect, zoomLevel, videoCenter, skew, keyframes, canvas, ctx, renderer, encoderSetup } = webmState;
     const timestampUs = frame.timestamp;
     const timestampMs = timestampUs / 1000;
     const timestampSec = timestampMs / 1000;
@@ -111,9 +113,10 @@ self.onmessage = async (e: MessageEvent<EncodeWorkerIn>) => {
     const interp = getStateAtTime(keyframes, timestampSec);
     const renderCropRect   = interp?.containerRect  ?? cropRect;
     const renderVideoCenter = interp?.videoCenter   ?? videoCenter;
-    const renderZoom       = interp?.zoom           ?? 1.0;
+    const renderZoom       = interp?.zoom           ?? (keyframes.length === 0 ? zoomLevel : 1.0);
+    const renderSkew       = interp?.skew           ?? skew;
 
-    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, renderCropRect, zoomLevel, renderVideoCenter, renderZoom);
+    renderer.render(ctx, makeFrame(frame, timestampMs), sceneConfig, renderCropRect, 1.0, renderVideoCenter, renderZoom, renderSkew);
 
     const outputFrame = new VideoFrame(canvas, {
       timestamp: timestampUs,
@@ -161,6 +164,7 @@ async function encode(
   cropRect: CropRect | null,
   zoomLevel: number,
   videoCenter: VideoCenter,
+  skew: Skew,
   keyframes: Keyframe[],
 ): Promise<void> {
   const { outputWidth: W, outputHeight: H } = sceneConfig;
@@ -197,9 +201,10 @@ async function encode(
       const interp = getStateAtTime(keyframes, timestampSec);
       const renderCropRect    = interp?.containerRect  ?? cropRect;
       const renderVideoCenter = interp?.videoCenter    ?? videoCenter;
-      const renderZoom        = interp?.zoom           ?? 1.0;
+      const renderZoom        = interp?.zoom           ?? (keyframes.length === 0 ? zoomLevel : 1.0);
+      const renderSkew        = interp?.skew           ?? skew;
 
-      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, renderCropRect, zoomLevel, renderVideoCenter, renderZoom);
+      renderer.render(ctx, makeFrame(videoFrame, timestampMs), sceneConfig, renderCropRect, 1.0, renderVideoCenter, renderZoom, renderSkew);
 
       const outputFrame = new VideoFrame(canvas, {
         timestamp: timestampUs,

@@ -5,8 +5,11 @@ import {
   updateKeyframe,
   deleteKeyframe,
   selectKeyframe,
-  undoKeyframe,
-  canUndoKeyframe,
+  undo,
+  redo,
+  canUndo,
+  canRedo,
+  commitHistory,
   setEditorMode,
 } from '../state/editorStore';
 
@@ -36,6 +39,10 @@ export class Timeline {
   private controls: VideoControls;
   private unsub: (() => void) | null = null;
   private draggingKfId: string | null = null;
+  private scrubbing = false;
+  // Armed on marker mousedown, fired on the first drag mousemove — so
+  // selecting a marker without moving it doesn't create an undo entry.
+  private pendingDragHistory = false;
   private lastKnownDuration = 0;
 
   constructor(container: HTMLElement, controls: VideoControls) {
@@ -76,6 +83,7 @@ export class Timeline {
           <!-- Keyframe controls (hidden in preview mode) -->
           <div class="ctrl-group" id="kf-controls">
             <button class="btn-ctrl" id="btn-undo"       title="Undo (Ctrl+Z)"               disabled>↩ Undo</button>
+            <button class="btn-ctrl" id="btn-redo"       title="Redo (Ctrl+Shift+Z)"         disabled>↪ Redo</button>
             <button class="btn-ctrl btn-ctrl--accent" id="btn-add-kf"    title="Add keyframe at current time">+ KF</button>
             <button class="btn-ctrl" id="btn-dupe-kf"   title="Duplicate selected keyframe to current time" disabled>⧉ KF</button>
             <button class="btn-ctrl btn-ctrl--danger" id="btn-delete-kf" title="Delete selected keyframe"   disabled>✕ KF</button>
@@ -119,9 +127,11 @@ export class Timeline {
     const loopBtn = this.el.querySelector('#btn-loop') as HTMLButtonElement | null;
     if (loopBtn) loopBtn.classList.toggle('btn-ctrl--active', this.controls.isLooping());
 
-    // Undo button
+    // Undo / redo buttons
     const undoBtn = this.el.querySelector('#btn-undo') as HTMLButtonElement | null;
-    if (undoBtn) undoBtn.disabled = !canUndoKeyframe();
+    if (undoBtn) undoBtn.disabled = !canUndo();
+    const redoBtn = this.el.querySelector('#btn-redo') as HTMLButtonElement | null;
+    if (redoBtn) redoBtn.disabled = !canRedo();
   }
 
   destroy(): void {
@@ -206,16 +216,35 @@ export class Timeline {
 
   // ─── Listeners ───────────────────────────────────────────────────────────────
 
-  private onDocMouseMove = (e: MouseEvent): void => {
-    if (!this.draggingKfId) return;
+  /** Convert a mouse event's X position to a clamped timeline time, or null. */
+  private timeAtCursor(e: MouseEvent): number | null {
     const rect = this.ruler.getBoundingClientRect();
     const dur  = this.controls.getDuration();
-    if (dur <= 0) return;
-    const t = Math.max(0, Math.min(dur, ((e.clientX - rect.left) / rect.width) * dur));
+    if (dur <= 0) return null;
+    return Math.max(0, Math.min(dur, ((e.clientX - rect.left) / rect.width) * dur));
+  }
+
+  private onDocMouseMove = (e: MouseEvent): void => {
+    if (this.scrubbing) {
+      const t = this.timeAtCursor(e);
+      if (t !== null) this.controls.seekTo(t);
+      return;
+    }
+    if (!this.draggingKfId) return;
+    const t = this.timeAtCursor(e);
+    if (t === null) return;
+    if (this.pendingDragHistory) {
+      commitHistory();
+      this.pendingDragHistory = false;
+    }
     updateKeyframe(this.draggingKfId, { time: t });
   };
 
-  private onDocMouseUp = (): void => { this.draggingKfId = null; };
+  private onDocMouseUp = (): void => {
+    this.draggingKfId = null;
+    this.pendingDragHistory = false;
+    this.scrubbing = false;
+  };
 
   private attachListeners(): void {
     document.addEventListener('mousemove', this.onDocMouseMove);
@@ -231,6 +260,7 @@ export class Timeline {
           // select KF and start drag
           selectKeyframe(marker.dataset.id);
           this.draggingKfId = marker.dataset.id;
+          this.pendingDragHistory = true;
           e.stopPropagation();
           e.preventDefault();
           return;
@@ -242,12 +272,13 @@ export class Timeline {
         return;
       }
 
-      // Click on empty ruler → seek + deselect (animate mode only deselects)
-      const rect = this.ruler.getBoundingClientRect();
-      const dur  = this.controls.getDuration();
-      if (dur > 0) {
-        const t = Math.max(0, Math.min(dur, ((e.clientX - rect.left) / rect.width) * dur));
+      // Press on empty ruler (or the playhead) → seek and start scrubbing;
+      // dragging keeps seeking until mouseup so the animation can be inspected.
+      const t = this.timeAtCursor(e);
+      if (t !== null) {
         this.controls.seekTo(t);
+        this.scrubbing = true;
+        e.preventDefault();
       }
       if (editorMode === 'animate') selectKeyframe(null);
     });
@@ -286,6 +317,7 @@ export class Timeline {
       if (selectedKeyframeId) deleteKeyframe(selectedKeyframeId);
     });
 
-    this.el.querySelector('#btn-undo')!.addEventListener('click', () => undoKeyframe());
+    this.el.querySelector('#btn-undo')!.addEventListener('click', () => undo());
+    this.el.querySelector('#btn-redo')!.addEventListener('click', () => redo());
   }
 }

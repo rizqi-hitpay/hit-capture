@@ -60,7 +60,11 @@ document.addEventListener('keydown', (e) => {
     document.getElementById('btn-to-end')?.click();
   } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
     e.preventDefault();
-    const btn = document.getElementById('btn-undo') as HTMLButtonElement | null;
+    const btn = document.getElementById(e.shiftKey ? 'btn-redo' : 'btn-undo') as HTMLButtonElement | null;
+    if (btn && !btn.disabled) btn.click();
+  } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
+    e.preventDefault();
+    const btn = document.getElementById('btn-redo') as HTMLButtonElement | null;
     if (btn && !btn.disabled) btn.click();
   }
 });

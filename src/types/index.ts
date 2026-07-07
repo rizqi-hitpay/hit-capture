@@ -190,6 +190,21 @@ export interface VideoCenter {
   y: number;
 }
 
+/**
+ * Skew angles (degrees) applied to the floating window around its center.
+ * x tilts the verticals (horizontal shear), y tilts the horizontals,
+ * z rotates the window in the canvas plane.
+ * tiltX / tiltY rotate the window in 3D around the horizontal / vertical
+ * axis with perspective (near edge grows, far edge shrinks).
+ */
+export interface Skew {
+  x: number;
+  y: number;
+  z: number;
+  tiltX: number;
+  tiltY: number;
+}
+
 // ─── Keyframe ─────────────────────────────────────────────────────────────────
 
 export interface Keyframe {
@@ -200,6 +215,8 @@ export interface Keyframe {
   videoCenter: VideoCenter;
   /** content zoom multiplier: 1.0 = normal, 2.0 = 2× magnified */
   zoom: number;
+  /** window skew in degrees; absent = no skew (pre-skew keyframes) */
+  skew?: Skew;
 }
 
 // ─── Editor state ─────────────────────────────────────────────────────────────
@@ -228,6 +245,7 @@ export interface EditorState {
   cropRect: CropRect | null;
   zoomLevel: number;
   videoCenter: VideoCenter;
+  skew: Skew;
   editContainerMode: boolean;
   keyframes: Keyframe[];
   selectedKeyframeId: string | null;
@@ -248,8 +266,8 @@ export type PipelineWorkerOut =
   | { type: 'ERROR'; message: string };
 
 export type EncodeWorkerIn =
-  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; keyframes: Keyframe[] }
-  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; estimatedFrames: number; keyframes: Keyframe[] }
+  | { type: 'START_ENCODE'; videoFile: File; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; skew: Skew; keyframes: Keyframe[] }
+  | { type: 'INIT_WEBM_ENCODE'; sceneConfig: SceneConfig; cropRect: CropRect | null; zoomLevel: number; videoCenter: VideoCenter; skew: Skew; estimatedFrames: number; keyframes: Keyframe[] }
   | { type: 'WEBM_FRAME'; frame: VideoFrame }
   | { type: 'END_WEBM_ENCODE' };
 

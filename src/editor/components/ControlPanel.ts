@@ -2,9 +2,11 @@ import {
   store,
   updateSceneConfig,
   setEditContainerMode,
+  setSkew,
   updateKeyframe,
+  commitHistory,
 } from '../state/editorStore';
-import type { EditorState, GradientPresetId } from '../../types';
+import type { EditorState, GradientPresetId, Skew } from '../../types';
 import { GRADIENT_IDS, GRADIENT_PRESETS } from '../../renderer/gradientPresets';
 
 export class ControlPanel {
@@ -48,6 +50,34 @@ export class ControlPanel {
           <h3 class="panel-heading">Container</h3>
           <button class="btn-edit-container" id="btn-edit-container">Edit Container</button>
           <p class="panel-hint" id="container-hint">Drag container to reposition on canvas</p>
+          <div id="skew-editor" style="display:none">
+            <div class="control-row" style="margin-top:8px">
+              <label class="control-label">Skew X</label>
+              <span class="control-value" id="skew-x-val">0°</span>
+            </div>
+            <input type="range" id="skew-x-slider" class="slider" min="-30" max="30" step="1" value="0" />
+            <div class="control-row" style="margin-top:6px">
+              <label class="control-label">Skew Y</label>
+              <span class="control-value" id="skew-y-val">0°</span>
+            </div>
+            <input type="range" id="skew-y-slider" class="slider" min="-30" max="30" step="1" value="0" />
+            <div class="control-row" style="margin-top:6px">
+              <label class="control-label">Skew Z (rotate)</label>
+              <span class="control-value" id="skew-z-val">0°</span>
+            </div>
+            <input type="range" id="skew-z-slider" class="slider" min="-45" max="45" step="1" value="0" />
+            <div class="control-row" style="margin-top:6px">
+              <label class="control-label">Tilt X (3D)</label>
+              <span class="control-value" id="skew-tiltX-val">0°</span>
+            </div>
+            <input type="range" id="skew-tiltX-slider" class="slider" min="-45" max="45" step="1" value="0" />
+            <div class="control-row" style="margin-top:6px">
+              <label class="control-label">Tilt Y (3D)</label>
+              <span class="control-value" id="skew-tiltY-val">0°</span>
+            </div>
+            <input type="range" id="skew-tiltY-slider" class="slider" min="-45" max="45" step="1" value="0" />
+            <button class="btn-ctrl" id="btn-skew-reset" style="margin-top:6px">Reset skew</button>
+          </div>
         </section>
 
         <!-- Selected Keyframe -->
@@ -83,12 +113,14 @@ export class ControlPanel {
     // Gradient preset picker
     this.el.querySelectorAll<HTMLButtonElement>('.preset-swatch').forEach((btn) => {
       btn.addEventListener('click', () => {
+        if (store.get().sceneConfig.gradient !== btn.dataset.preset) commitHistory();
         updateSceneConfig({ gradient: btn.dataset.preset as GradientPresetId });
       });
     });
 
-    // Corner radius
+    // Corner radius — history committed once at drag start, not per input tick
     const radiusSlider = this.el.querySelector('#corner-radius') as HTMLInputElement;
+    radiusSlider.addEventListener('pointerdown', () => commitHistory());
     radiusSlider.addEventListener('input', () => {
       const val = parseInt(radiusSlider.value);
       (this.el.querySelector('#radius-val') as HTMLElement).textContent = `${val}px`;
@@ -101,8 +133,36 @@ export class ControlPanel {
       setEditContainerMode(!store.get().editContainerMode);
     });
 
-    // Keyframe zoom slider
+    // Skew sliders — history committed once at drag start; writes go to the
+    // live skew and, when a keyframe is selected, into that keyframe too.
+    const applySkew = (axis: keyof Skew, val: number) => {
+      const st = store.get();
+      const newSkew = { ...st.skew, [axis]: val };
+      setSkew(newSkew);
+      if (st.selectedKeyframeId) updateKeyframe(st.selectedKeyframeId, { skew: newSkew });
+      (this.el.querySelector(`#skew-${axis}-val`) as HTMLElement).textContent = `${val}°`;
+    };
+
+    (['x', 'y', 'z', 'tiltX', 'tiltY'] as const).forEach((axis) => {
+      const slider = this.el.querySelector(`#skew-${axis}-slider`) as HTMLInputElement;
+      slider.addEventListener('pointerdown', () => commitHistory());
+      slider.addEventListener('input', () => applySkew(axis, parseInt(slider.value)));
+    });
+
+    (this.el.querySelector('#btn-skew-reset') as HTMLButtonElement).addEventListener('click', () => {
+      const st = store.get();
+      if (Object.values(st.skew).every((v) => v === 0)) return;
+      commitHistory();
+      const zero = { x: 0, y: 0, z: 0, tiltX: 0, tiltY: 0 };
+      setSkew(zero);
+      if (st.selectedKeyframeId) updateKeyframe(st.selectedKeyframeId, { skew: zero });
+    });
+
+    // Keyframe zoom slider — history committed once at drag start
     const zoomSlider = this.el.querySelector('#kf-zoom-slider') as HTMLInputElement;
+    zoomSlider.addEventListener('pointerdown', () => {
+      if (store.get().selectedKeyframeId) commitHistory();
+    });
     zoomSlider.addEventListener('input', () => {
       const { selectedKeyframeId } = store.get();
       if (!selectedKeyframeId) return;
@@ -135,8 +195,22 @@ export class ControlPanel {
     }
     if (hint) {
       hint.textContent = state.editContainerMode
-        ? 'Drag container to reveal different parts of the video'
+        ? 'Drag inside to move the video · scroll to zoom · drag handles to resize'
         : 'Drag container to reposition on canvas';
+    }
+
+    // Skew editor — only while editing the container
+    const skewEditor = this.el.querySelector('#skew-editor') as HTMLElement | null;
+    if (skewEditor) {
+      skewEditor.style.display = state.editContainerMode ? 'block' : 'none';
+      (['x', 'y', 'z', 'tiltX', 'tiltY'] as const).forEach((axis) => {
+        const slider = this.el.querySelector(`#skew-${axis}-slider`) as HTMLInputElement | null;
+        const label  = this.el.querySelector(`#skew-${axis}-val`) as HTMLElement | null;
+        if (slider && label) {
+          slider.value = String(state.skew[axis]);
+          label.textContent = `${state.skew[axis]}°`;
+        }
+      });
     }
 
     // Keyframe section — hide entirely in preview mode

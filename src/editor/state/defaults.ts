@@ -1,4 +1,4 @@
-import type { PipelineParams, SceneConfig, CropRect, VideoCenter, Keyframe, EditorMode } from '../../types';
+import type { PipelineParams, SceneConfig, CropRect, VideoCenter, Skew, Keyframe, EditorMode } from '../../types';
 import {
   DWELL_THRESHOLD_PX,
   DWELL_THRESHOLD_MS,
@@ -21,6 +21,7 @@ import {
 export const DEFAULT_CONTAINER_RECT: CropRect = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
 export const DEFAULT_ZOOM_LEVEL = 1.0;
 export const DEFAULT_VIDEO_CENTER: VideoCenter = { x: 0.5, y: 0.5 };
+export const DEFAULT_SKEW: Skew = { x: 0, y: 0, z: 0, tiltX: 0, tiltY: 0 };
 export const DEFAULT_KEYFRAMES: Keyframe[] = [];
 export const DEFAULT_SELECTED_KEYFRAME_ID: string | null = null;
 export const DEFAULT_EDITOR_MODE: EditorMode = 'animate';
